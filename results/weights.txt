@@ -1,0 +1,31 @@
+WEIGHTS: three tenants with weights 1, 2 and 4, all with a deep backlog
+pool: 20 worker slots
+job lengths: bronze 50 to 150 ms, silver 200 to 800 ms, gold 1 to 3 s
+
+measuring for 60 seconds ...
+
+Share of worker time over the 60 seconds:
+
+tenant  weight  jobs done  worker seconds  share  target
+------  ------  ---------  --------------  -----  ------
+bronze       1       1601           161.4  14.3%   14.3%
+silver       2        637           323.1  28.5%   28.6%
+  gold       4        326           647.9  57.2%   57.1%
+
+Worker share per 5 s bucket:
+
+time  bronze  silver  gold                          pool of 20 workers
+----  ------  ------  ----  ------------------------------------------
+ +0s     2.7     5.4  10.7  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
+ +5s     2.6     5.3  10.9  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++10s     2.7     5.4  10.8  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++15s     2.7     5.4  10.7  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++20s     2.6     5.4  10.9  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++25s     2.7     5.4  10.7  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++30s     2.7     5.3  10.9  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++35s     2.7     5.5  10.6  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++40s     2.7     5.4  10.8  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++45s     2.7     5.4  10.8  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++50s     2.7     5.2  11.0  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
++55s     2.7     5.5  10.7  |bbbbbsssssssssssGGGGGGGGGGGGGGGGGGGGGG..|
+(average workers held per tenant. b = bronze, s = silver, G = gold, . = idle)
