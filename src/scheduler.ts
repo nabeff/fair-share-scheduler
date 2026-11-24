@@ -19,11 +19,25 @@ import { decide, type Decision, type TenantSnapshot } from "./fairshare.ts";
 // Any number works, two scheduler instances only have to agree on it.
 const SCHEDULER_LOCK = 7_316_001;
 
+// Every query of a pass is written to read a few rows through an index.
+// Postgres picks its plan from table statistics, and a queue changes too
+// fast for them: it goes from empty to 100,000 rows and back between two
+// ANALYZE runs. With wrong statistics it sometimes chose to read the whole
+// backlog, and a pass got slower as the queue grew. Inside the scheduler's
+// transaction only index scans are allowed, so the cost of a pass does not
+// depend on the statistics. JIT compilation is off because it would add
+// about 20 ms to a query that takes less than 1 ms.
+const PLAN_SETTINGS = [
+  "SET LOCAL enable_seqscan = off",
+  "SET LOCAL enable_bitmapscan = off",
+  "SET LOCAL jit = off",
+].join("; ");
+
 /** One scheduler pass. Returns the snapshot it decided on, or null if skipped. */
 export async function pass(db: Db): Promise<PassResult | null> {
   const tx = await db.connect();
   try {
-    await tx.query("BEGIN");
+    await tx.query(`BEGIN; ${PLAN_SETTINGS}`);
 
     // Only one scheduler decides at a time. A second instance finds the lock
     // taken and skips its pass, which makes it a hot standby.
@@ -100,8 +114,8 @@ async function liveSlots(tx: PoolClient): Promise<number> {
   return rows[0].slots;
 }
 
-// One row per tenant. Every number comes from a small partial index, so the
-// query costs the same with 10 waiting jobs or with 100,000.
+// One row per tenant. Every number comes from the head of a partial index,
+// so the query costs the same with 10 waiting jobs or with 100,000.
 async function loadTenants(
   tx: PoolClient,
   totalSlots: number,
@@ -124,6 +138,8 @@ async function loadTenants(
      ) held ON held.tenant_id = t.id
      -- Jobs waiting to be picked. We never dispatch more than the pool in
      -- one pass, so counting stops there instead of walking the backlog.
+     -- The ORDER BY is the order of the jobs_waiting index: Postgres walks
+     -- the index from its start and stops at the LIMIT.
      CROSS JOIN LATERAL (
        SELECT count(*) AS waiting
        FROM (
@@ -131,6 +147,7 @@ async function loadTenants(
          WHERE j.tenant_id = t.id
            AND j.status IN ('pending', 'failed')
            AND j.run_at <= now()
+         ORDER BY j.created_at, j.id
          LIMIT $1
        ) first_waiting
      ) head`,
@@ -153,8 +170,9 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
     ]);
   }
   for (const [tenantId, count] of decision.dispatch) {
-    // Oldest first within a tenant. A job waiting for a retry ("failed")
-    // is skipped until its backoff time has passed, then it is first again.
+    // Oldest first within a tenant. A retried job keeps its creation time,
+    // so it stays in front of the jobs submitted after it. While it waits
+    // for its backoff ("failed", run_at in the future) it is skipped.
     await tx.query(
       `UPDATE jobs SET status = 'ready', ready_at = now()
        WHERE id IN (
@@ -162,7 +180,7 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
          WHERE tenant_id = $1
            AND status IN ('pending', 'failed')
            AND run_at <= now()
-         ORDER BY id
+         ORDER BY created_at, id
          LIMIT $2
        )`,
       [tenantId, count],
