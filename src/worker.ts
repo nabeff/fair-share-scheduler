@@ -153,7 +153,8 @@ async function run(job: ClaimedJob): Promise<void> {
   try {
     await reportWithRetry(job, error);
   } catch (err) {
-    console.error(`job ${job.id}: result not saved, it will run again`, err);
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(`job ${job.id}: result not saved, it will run again`, reason);
   } finally {
     running.delete(job);
   }

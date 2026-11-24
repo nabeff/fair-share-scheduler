@@ -93,6 +93,10 @@ async function reset(): Promise<void> {
   await db.query("UPDATE tenants SET vtime = 0, active = false");
 }
 
+/** "45 seconds" or "23 minutes". */
+const duration = (s: number) =>
+  s < 120 ? `${Math.round(s)} seconds` : `${Math.round(s / 60)} minutes`;
+
 const seconds = (from: Date, to: Date) =>
   (to.getTime() - from.getTime()) / 1000;
 const addSeconds = (date: Date, s: number) =>
@@ -354,7 +358,7 @@ async function flood(): Promise<void> {
   const fifoWait = (ahead.rows[0].n * average.rows[0].s) / pool;
   say(
     `\nFor comparison: in one first in, first out queue they would have waited behind ` +
-      `${ahead.rows[0].n.toLocaleString("en")} jobs, about ${(fifoWait / 60).toFixed(0)} minutes.`,
+      `${ahead.rows[0].n.toLocaleString("en")} jobs, about ${duration(fifoWait)}.`,
   );
 
   // How were the workers shared over time?
