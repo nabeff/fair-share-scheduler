@@ -19,7 +19,8 @@ interface ClaimedJob {
   max_attempts: number;
 }
 
-let running = 0;
+// Ids of the jobs this process is running right now.
+const running = new Set<string>();
 let stopping = false;
 
 // FOR UPDATE SKIP LOCKED lets many workers claim at the same time without
@@ -46,6 +47,9 @@ async function claim(limit: number): Promise<ClaimedJob[]> {
 }
 
 // Tell the scheduler we are alive, and keep the lease on our running jobs.
+// Only jobs this process really still holds are extended. A job we stopped
+// caring about (finished, or its result could not be saved) is left to
+// expire, so the scheduler takes it back instead of it hanging forever.
 async function heartbeat(): Promise<void> {
   const slots = stopping ? 0 : config.workerSlots;
   await db.query(
@@ -55,8 +59,8 @@ async function heartbeat(): Promise<void> {
   );
   await db.query(
     `UPDATE jobs SET lease_expires_at = now() + $2::int * interval '1 ms'
-     WHERE worker_id = $1 AND status = 'running'`,
-    [workerId, config.leaseMs],
+     WHERE worker_id = $1 AND status = 'running' AND id = ANY($3::bigint[])`,
+    [workerId, config.leaseMs, [...running]],
   );
 }
 
@@ -148,7 +152,7 @@ async function run(job: ClaimedJob): Promise<void> {
   } catch (err) {
     console.error(`job ${job.id}: result not saved, it will run again`, err);
   } finally {
-    running -= 1;
+    running.delete(job.id);
   }
 }
 
@@ -161,13 +165,13 @@ async function main(): Promise<void> {
 
   while (!stopping) {
     let claimed = 0;
-    const free = config.workerSlots - running;
+    const free = config.workerSlots - running.size;
     if (free > 0) {
       try {
         const jobs = await claim(free);
         claimed = jobs.length;
         for (const job of jobs) {
-          running += 1;
+          running.add(job.id);
           void run(job);
         }
       } catch (err) {
@@ -184,7 +188,7 @@ async function main(): Promise<void> {
   // that is recovered through its lease, like a crash.
   await heartbeat().catch(() => {});
   const deadline = Date.now() + config.shutdownGraceMs;
-  while (running > 0 && Date.now() < deadline) await sleep(50);
+  while (running.size > 0 && Date.now() < deadline) await sleep(50);
   clearInterval(beat);
   await db
     .query("DELETE FROM workers WHERE id = $1", [workerId])

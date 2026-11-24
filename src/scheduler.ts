@@ -1,9 +1,10 @@
 // The scheduler. It runs one short pass every few milliseconds:
 //
-//   1. count the slots of the workers that are alive
-//   2. load one row per tenant: weight, usage, running and waiting jobs
-//   3. let decide() choose who gets the free workers (src/fairshare.ts)
-//   4. mark that many of their oldest waiting jobs "ready" for the workers
+//   1. take back the jobs whose worker went silent (crash recovery)
+//   2. count the slots of the workers that are alive
+//   3. load one row per tenant: weight, usage, running and waiting jobs
+//   4. let decide() choose who gets the free workers (src/fairshare.ts)
+//   5. mark that many of their oldest waiting jobs "ready" for the workers
 //
 // It keeps nothing in memory between two passes. Everything it knows comes
 // from Postgres, so it can crash and restart at any point without losing
@@ -35,6 +36,7 @@ export async function pass(db: Db): Promise<PassResult | null> {
       return null;
     }
 
+    await reclaimExpiredLeases(tx);
     const totalSlots = await liveSlots(tx);
     const tenants = await loadTenants(tx, totalSlots);
     const decision = decide(tenants, totalSlots);
@@ -54,6 +56,36 @@ export interface PassResult {
   totalSlots: number;
   tenants: TenantSnapshot[];
   decision: Decision;
+}
+
+// Crash recovery. A running job whose lease ran out has lost its worker: the
+// process died, hung, or was cut off from Postgres. The job goes back to the
+// queue and keeps its place at the front. If it has used all its attempts it
+// is buried instead, so a job that keeps killing its workers cannot loop
+// forever. The tenant is charged for the time the job held a worker slot.
+async function reclaimExpiredLeases(tx: PoolClient): Promise<void> {
+  await tx.query(
+    `WITH expired AS (
+       UPDATE jobs
+       SET status = CASE WHEN attempts >= max_attempts
+                         THEN 'dead' ELSE 'pending' END,
+           finished_at = CASE WHEN attempts >= max_attempts THEN now() END,
+           last_error = 'lease expired: the worker stopped sending heartbeats',
+           lease_expires_at = NULL
+       WHERE status = 'running' AND lease_expires_at < now()
+       RETURNING tenant_id,
+                 extract(epoch FROM now() - started_at)::float8 AS seconds
+     ),
+     used AS (
+       SELECT tenant_id, sum(seconds) AS seconds
+       FROM expired
+       GROUP BY tenant_id
+     )
+     UPDATE tenants t
+     SET vtime = t.vtime + used.seconds / t.weight
+     FROM used
+     WHERE t.id = used.tenant_id`,
+  );
 }
 
 // Slots of the workers that sent a heartbeat recently. A worker that stays
@@ -121,8 +153,8 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
     ]);
   }
   for (const [tenantId, count] of decision.dispatch) {
-    // Oldest first within a tenant. Jobs waiting for a retry ("failed")
-    // join the queue again once their backoff time has passed.
+    // Oldest first within a tenant. A job waiting for a retry ("failed")
+    // is skipped until its backoff time has passed, then it is first again.
     await tx.query(
       `UPDATE jobs SET status = 'ready', ready_at = now()
        WHERE id IN (
@@ -130,7 +162,7 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
          WHERE tenant_id = $1
            AND status IN ('pending', 'failed')
            AND run_at <= now()
-         ORDER BY run_at, id
+         ORDER BY id
          LIMIT $2
        )`,
       [tenantId, count],

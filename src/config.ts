@@ -7,7 +7,7 @@ const number = (name: string, fallback: number): number =>
 export const config = {
   databaseUrl:
     process.env.DATABASE_URL ??
-    "postgres://postgres:postgres@localhost:5432/scheduler",
+    "postgres://postgres:postgres@localhost:54329/scheduler",
 
   // Tenants and weights are seeded from this file on every start.
   tenantsFile:

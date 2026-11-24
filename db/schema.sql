@@ -38,8 +38,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 -- Waiting jobs per tenant, oldest first. The scheduler only reads the head of each tenant's
--- queue, so its cost does not grow with the size of the backlog.
-CREATE INDEX IF NOT EXISTS jobs_waiting ON jobs (tenant_id, run_at, id)
+-- queue, so its cost does not grow with the size of the backlog. Ordering by id means a job
+-- that is retried keeps its place in front of the jobs submitted after it.
+CREATE INDEX IF NOT EXISTS jobs_waiting ON jobs (tenant_id, id)
   WHERE status IN ('pending', 'failed');
 
 -- The ready queue that workers claim from.

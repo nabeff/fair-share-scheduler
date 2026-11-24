@@ -14,8 +14,10 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: scheduler
+    # Published on an unusual host port so it never clashes with a Postgres
+    # already running on the machine. Only tests run from the host need it.
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "${DB_PORT:-54329}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -52,6 +54,13 @@ services:
     command: ["node", "src/worker.ts"]
     deploy:
       replicas: 4
+
+  # All tests, in a database of their own:  docker compose run --rm test
+  test:
+    <<: *app
+    command: ["npm", "test"]
+    profiles: ["tools"]
+    restart: "no"
 
 volumes:
   pgdata:
