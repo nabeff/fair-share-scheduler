@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
-import { after, before, describe, test } from "node:test";
+import { after, afterEach, before, describe, test } from "node:test";
 import type pg from "pg";
 import { pass } from "../src/scheduler.ts";
 import {
@@ -77,24 +77,33 @@ describe("a lease that expired", { skip }, () => {
 
 describe("with a real scheduler and real workers", { skip }, () => {
   let db: pg.Pool;
-  const processes: ChildProcess[] = [];
+  let scheduler: ChildProcess;
+  const workers: ChildProcess[] = [];
+  const startWorker = (settings?: Record<string, string>) => {
+    const worker = start("worker", settings);
+    workers.push(worker);
+    return worker;
+  };
   before(async () => {
     db = await freshDatabase();
-    processes.push(start("scheduler"));
+    scheduler = start("scheduler");
+  });
+  // Every test starts its own workers and leaves none behind.
+  afterEach(() => {
+    for (const worker of workers.splice(0)) worker.kill("SIGKILL");
   });
   after(async () => {
-    for (const child of processes) child.kill("SIGKILL");
+    scheduler.kill("SIGKILL");
     await db.end();
   });
 
   test("a job is retried when its worker is killed in the middle", async () => {
-    const first = start("worker");
-    processes.push(first);
+    const first = startWorker();
     const id = await submit(db, "small-1", { sleep_ms: 1500 });
     const started = await waitFor("the job to start", jobIs(db, id, "running"));
 
     first.kill("SIGKILL"); // a crash: no cleanup, no goodbye
-    processes.push(start("worker"));
+    startWorker();
 
     const done = await waitFor("the retry", jobIs(db, id, "succeeded"));
     assert.equal(done.attempts, 2);
@@ -102,7 +111,24 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.match(done.last_error, /lease expired/);
   });
 
+  // What Docker does after a crash: the container restarts and the worker
+  // comes back under the same id. It must not keep its old job alive.
+  test("the job is also retried when the worker restarts under the same id", async () => {
+    const first = startWorker({ WORKER_ID: "worker-a" });
+    const id = await submit(db, "small-1", { sleep_ms: 1500 });
+    await waitFor("the job to start", jobIs(db, id, "running"));
+
+    first.kill("SIGKILL");
+    startWorker({ WORKER_ID: "worker-a" });
+
+    const done = await waitFor("the retry", jobIs(db, id, "succeeded"));
+    assert.equal(done.attempts, 2);
+    assert.equal(done.worker_id, "worker-a");
+    assert.match(done.last_error, /lease expired/);
+  });
+
   test("a job that fails once succeeds on the retry", async () => {
+    startWorker();
     const id = await submit(db, "small-1", { fail_attempts: 1 });
 
     const done = await waitFor("the retry", jobIs(db, id, "succeeded"));
@@ -111,6 +137,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
   });
 
   test("a job that always fails is dead after 3 attempts", async () => {
+    startWorker();
     const id = await submit(db, "small-1", { fail_attempts: 99 });
 
     const dead = await waitFor("the job to die", jobIs(db, id, "dead"));

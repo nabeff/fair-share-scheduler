@@ -57,10 +57,18 @@ const FAST_SETTINGS = {
 };
 
 /** Starts a real scheduler or worker process on the test database. */
-export function start(script: "scheduler" | "worker"): ChildProcess {
+export function start(
+  script: "scheduler" | "worker",
+  settings: Record<string, string> = {},
+): ChildProcess {
   const file = new URL(`../src/${script}.ts`, import.meta.url).pathname;
   return spawn(process.execPath, [file], {
-    env: { ...process.env, ...FAST_SETTINGS, DATABASE_URL: testDatabaseUrl },
+    env: {
+      ...process.env,
+      ...FAST_SETTINGS,
+      ...settings,
+      DATABASE_URL: testDatabaseUrl,
+    },
     stdio: ["ignore", "ignore", "inherit"],
   });
 }

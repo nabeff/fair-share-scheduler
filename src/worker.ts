@@ -9,7 +9,9 @@ import { hostname } from "node:os";
 import { config } from "./config.ts";
 import { connect, sleep } from "./db.ts";
 
-const workerId = `${hostname()}-${process.pid}`;
+// In a container the hostname and the pid (always 1) survive a restart, so a
+// worker that crashed comes back under the same id. See heartbeat().
+const workerId = process.env.WORKER_ID ?? `${hostname()}-${process.pid}`;
 const db = connect(4);
 
 interface ClaimedJob {
@@ -19,8 +21,8 @@ interface ClaimedJob {
   max_attempts: number;
 }
 
-// Ids of the jobs this process is running right now.
-const running = new Set<string>();
+// The jobs this process is running right now.
+const running = new Set<ClaimedJob>();
 let stopping = false;
 
 // FOR UPDATE SKIP LOCKED lets many workers claim at the same time without
@@ -47,9 +49,10 @@ async function claim(limit: number): Promise<ClaimedJob[]> {
 }
 
 // Tell the scheduler we are alive, and keep the lease on our running jobs.
-// Only jobs this process really still holds are extended. A job we stopped
-// caring about (finished, or its result could not be saved) is left to
-// expire, so the scheduler takes it back instead of it hanging forever.
+// Only the jobs this process holds in memory are extended, not every job
+// stored under our id. A worker that restarts under the same id must not
+// keep the jobs of its previous life alive: they expire and are retried.
+// The same goes for a job whose result could not be saved.
 async function heartbeat(): Promise<void> {
   const slots = stopping ? 0 : config.workerSlots;
   await db.query(
@@ -60,7 +63,7 @@ async function heartbeat(): Promise<void> {
   await db.query(
     `UPDATE jobs SET lease_expires_at = now() + $2::int * interval '1 ms'
      WHERE worker_id = $1 AND status = 'running' AND id = ANY($3::bigint[])`,
-    [workerId, config.leaseMs, [...running]],
+    [workerId, config.leaseMs, [...running].map((job) => job.id)],
   );
 }
 
@@ -152,7 +155,7 @@ async function run(job: ClaimedJob): Promise<void> {
   } catch (err) {
     console.error(`job ${job.id}: result not saved, it will run again`, err);
   } finally {
-    running.delete(job.id);
+    running.delete(job);
   }
 }
 
@@ -171,7 +174,7 @@ async function main(): Promise<void> {
         const jobs = await claim(free);
         claimed = jobs.length;
         for (const job of jobs) {
-          running.add(job.id);
+          running.add(job);
           void run(job);
         }
       } catch (err) {
