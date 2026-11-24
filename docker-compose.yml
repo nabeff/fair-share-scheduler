@@ -20,8 +20,11 @@ services:
       - "${DB_PORT:-54329}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Checked over TCP on purpose. While the image sets up a new volume, a
+    # temporary server answers on the unix socket only, and the migration
+    # must not start before the real server is up.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d scheduler"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d scheduler"]
       interval: 2s
       timeout: 3s
       retries: 30
