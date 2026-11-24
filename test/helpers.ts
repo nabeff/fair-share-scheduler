@@ -1,6 +1,7 @@
 // Helpers for the tests that need a real Postgres and real processes.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { config } from "../src/config.ts";
 import { sleep } from "../src/db.ts";
@@ -64,7 +65,7 @@ export function start(
   script: "api" | "scheduler" | "worker",
   settings: Record<string, string> = {},
 ): ChildProcess {
-  const file = new URL(`../src/${script}.ts`, import.meta.url).pathname;
+  const file = fileURLToPath(new URL(`../src/${script}.ts`, import.meta.url));
   return spawn(process.execPath, [file], {
     env: {
       ...process.env,

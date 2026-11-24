@@ -1,6 +1,8 @@
 // Every setting comes from the environment, so one image can run as API,
 // scheduler or worker.
 
+import { fileURLToPath } from "node:url";
+
 const number = (name: string, fallback: number): number =>
   Number(process.env[name] ?? fallback);
 
@@ -12,7 +14,7 @@ export const config = {
   // Tenants and weights are seeded from this file on every start.
   tenantsFile:
     process.env.TENANTS_FILE ??
-    new URL("../tenants.json", import.meta.url).pathname,
+    fileURLToPath(new URL("../tenants.json", import.meta.url)),
 
   // API
   port: number("PORT", 8080),
