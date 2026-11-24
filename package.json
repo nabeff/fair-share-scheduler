@@ -14,7 +14,8 @@
     "api": "node src/api.ts",
     "test": "node --test test/*.test.ts",
     "worker": "node src/worker.ts",
-    "scheduler": "node src/scheduler.ts"
+    "scheduler": "node src/scheduler.ts",
+    "loadtest": "node scripts/loadtest.ts"
   },
   "dependencies": {
     "fastify": "^5.12.8",

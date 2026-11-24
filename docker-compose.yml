@@ -62,5 +62,21 @@ services:
     profiles: ["tools"]
     restart: "no"
 
+  # The load test. It empties the job table, then prints its report and
+  # writes it to ./results:  docker compose run --rm loadtest
+  # One scenario only:       docker compose run --rm loadtest flood
+  loadtest:
+    <<: *app
+    entrypoint: ["node", "scripts/loadtest.ts"]
+    profiles: ["tools"]
+    restart: "no"
+    user: root # so it can write into the mounted ./results on any host
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/scheduler
+      API_URL: http://api:8080
+    volumes:
+      - ./results:/app/results
+    depends_on: [api, scheduler, worker]
+
 volumes:
   pgdata:
