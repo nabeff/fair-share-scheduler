@@ -7,6 +7,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 import type pg from "pg";
 import {
+  databaseProxy,
   freshDatabase,
   postgresIsUp,
   start,
@@ -28,28 +29,34 @@ describe("the API", { skip }, () => {
   let base: string;
 
   const get = (path: string) => fetch(base + path);
-  const post = (body: string) =>
-    fetch(`${base}/jobs`, {
+  const post = (body: string, to = base) =>
+    fetch(`${to}/jobs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
+      signal: AbortSignal.timeout(5000), // an answer that never comes fails the test
     });
 
-  before(async () => {
-    db = await freshDatabase(DATABASE);
+  /** Starts an API process on a free port and waits until it answers. */
+  async function startApi(settings: Record<string, string>) {
     const port = await freePort();
-    base = `http://127.0.0.1:${port}`;
-    api = start("api", {
-      PORT: String(port),
-      DATABASE_URL: urlFor(DATABASE),
-    });
+    const url = `http://127.0.0.1:${port}`;
+    const process = start("api", { PORT: String(port), ...settings });
     await waitFor("the API to answer", async () => {
       try {
-        return (await get("/health")).ok || undefined;
+        return (await fetch(`${url}/health`)).ok || undefined;
       } catch {
         return undefined; // not listening yet
       }
     });
+    return { process, url };
+  }
+
+  before(async () => {
+    db = await freshDatabase(DATABASE);
+    const started = await startApi({ DATABASE_URL: urlFor(DATABASE) });
+    api = started.process;
+    base = started.url;
   });
   after(async () => {
     api.kill("SIGKILL");
@@ -107,6 +114,31 @@ describe("the API", { skip }, () => {
       JSON.stringify({ tenant_id: "small-1", payload: { text: "\u0000" } }),
     );
     assert.equal(nulCharacter.status, 400);
+  });
+
+  // Postgres takes the connection but never answers: a frozen server, or a
+  // network that swallows the packets. The client must not be left waiting.
+  test("when Postgres stops answering, the API says 503 instead of waiting", async () => {
+    const postgres = await databaseProxy(urlFor(DATABASE));
+    const second = await startApi({
+      DATABASE_URL: postgres.url,
+      DB_TIMEOUT_MS: "300",
+    });
+    const job = JSON.stringify({ tenant_id: "small-1", payload: {} });
+    try {
+      assert.equal((await post(job, second.url)).status, 201);
+
+      postgres.freeze();
+      assert.equal((await post(job, second.url)).status, 503);
+
+      postgres.restore();
+      await waitFor("jobs to be stored again", async () =>
+        (await post(job, second.url)).status === 201 ? true : undefined,
+      );
+    } finally {
+      second.process.kill("SIGKILL");
+      postgres.close();
+    }
   });
 });
 

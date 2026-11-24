@@ -20,7 +20,15 @@ function startWith(env: Record<string, string>) {
 test("a setting that is not a number stops the process and names the variable", () => {
   const result = startWith({ LEASE_MS: "ten seconds" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /LEASE_MS must be a number/);
+  assert.match(result.stderr, /LEASE_MS must be a whole number/);
+});
+
+// Every setting is a count or a number of milliseconds, and the SQL
+// statements take them as integers.
+test("a number with a fraction is refused as well", () => {
+  const result = startWith({ LEASE_MS: "2500.5" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LEASE_MS must be a whole number/);
 });
 
 test("an empty setting falls back to its default", () => {

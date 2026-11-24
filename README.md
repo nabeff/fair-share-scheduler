@@ -86,12 +86,12 @@ Where things are:
 docker compose run --rm test
 ```
 
-44 tests:
+51 tests:
 
-- `api.test.ts`: the real API process on a real Postgres. Submit and read back, unknown tenant, unknown job, and a request that can never work gets 400, not the 503 that asks for a retry.
+- `api.test.ts`: the real API process on a real Postgres. Submit and read back, unknown tenant, unknown job, and a request that can never work gets 400, not the 503 that asks for a retry. When Postgres stops answering, the API says 503 instead of leaving the client waiting.
 - `fairshare.test.ts`: the "pick the next tenant" logic. Weights, the cap, the idle rule, a tenant alone.
 - `simulation.test.ts`: the same function driving a simulated pool. A flood, weights 1, 2, 4, 5 minute jobs, 60 tenants.
-- `recovery.test.ts`: a real scheduler and real workers on a real Postgres. A worker is killed with SIGKILL in the middle of a job and the job is retried. A job that fails once succeeds on the retry. A job that always fails is `dead` after 3 attempts.
+- `recovery.test.ts`: a real scheduler and real workers on a real Postgres. A worker is killed with SIGKILL in the middle of a job and the job is retried. A worker that is stopped hands its job back and no attempt is used. Postgres is cut off from a worker for 6 seconds and the finished job is not run again. A result that arrives after the lease was lost is refused. A job that fails once succeeds on the retry. A job that always fails is `dead` after 3 attempts. Postgres stops answering for a second, and scheduler and worker carry on afterwards. Postgres is away for longer than the lease, and the scheduler does not take the job of a live worker back.
 - `worker.test.ts`, `scheduler.test.ts` and `config.test.ts`: the retry backoff, a check that the scheduling code never mentions the payload, and a setting that is not a number stops the process at start.
 
 Without Docker: `npm install && npm test`, with Node 24 or newer. The database tests use the Postgres of `docker compose up -d db` on port 54329, and are skipped when it is not reachable.
@@ -226,18 +226,47 @@ docker compose up -d
 
 About 10 seconds after the kill (the lease time) the 5 jobs of the dead worker are `pending` again. They are first in line, they start again with `attempts = 2`, and all 40 jobs end as `succeeded`.
 
+A worker that is stopped instead of killed (a deploy, or `docker compose up -d --scale worker=3`) gets 8 seconds to finish its jobs. The ones still running go back to the queue at once, and that does not count as an attempt.
+
+## See a database outage
+
+```bash
+# 150 jobs of 400 ms
+for i in $(seq 150); do
+  curl -s -o /dev/null -X POST localhost:8080/jobs -H 'content-type: application/json' \
+    -d '{"tenant_id": "big", "payload": {"sleep_ms": 400}}'
+done
+
+# Postgres is gone for 15 seconds, longer than the lease
+docker compose stop db && sleep 15 && docker compose start db
+
+# a few seconds later
+docker compose exec db psql -U postgres -d scheduler \
+  -c "SELECT status, attempts, count(*) FROM jobs GROUP BY 1, 2 ORDER BY 1, 2"
+```
+
+All 150 jobs end as `succeeded` with `attempts = 1`: none is lost and none runs twice.
+
+- While Postgres is away, no call waits longer than 5 seconds (`DB_TIMEOUT_MS`). The API answers 503, the scheduler and the workers retry every second.
+- A worker keeps the result of a job it finished until Postgres takes it.
+- When Postgres is back, every lease has run out, but no worker died. The scheduler waits one lease before it takes any job back, so the workers that are alive keep theirs.
+
+`docker compose pause db` and `unpause db` show the same with a Postgres that stops answering instead of being down.
+
 ## Settings
 
 Environment variables and their defaults. In Docker, set them under `x-app` in `docker-compose.yml`.
 
-| Variable       | Default | Meaning                                                          |
-| -------------- | ------- | ---------------------------------------------------------------- |
-| `WORKER_SLOTS` | 5       | jobs one worker process runs at once                             |
-| `TICK_MS`      | 20      | pause between two scheduler passes                               |
-| `POLL_MS`      | 20      | how often a free worker looks for a job                          |
-| `HEARTBEAT_MS` | 2000    | how often a worker extends its leases                            |
-| `LEASE_MS`     | 10000   | a job goes back to the queue when its worker is silent this long |
-| `MAX_ATTEMPTS` | 3       | attempts before a job is `dead`                                  |
-| `BACKOFF_MS`   | 2000    | wait before the first retry, doubled for the next one            |
-| `API_PORT`     | 8080    | port of the API on the host                                      |
-| `DB_PORT`      | 54329   | port of Postgres on the host                                     |
+| Variable            | Default | Meaning                                                                                       |
+| ------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| `WORKER_SLOTS`      | 5       | jobs one worker process runs at once                                                          |
+| `TICK_MS`           | 20      | pause between two scheduler passes                                                            |
+| `POLL_MS`           | 20      | how often a free worker looks for a job                                                       |
+| `HEARTBEAT_MS`      | 2000    | how often a worker extends its leases                                                         |
+| `LEASE_MS`          | 10000   | a job goes back to the queue when its worker is silent this long                              |
+| `SHUTDOWN_GRACE_MS` | 8000    | how long a stopped worker lets its jobs finish before it hands them back                      |
+| `MAX_ATTEMPTS`      | 3       | attempts before a job is `dead`                                                               |
+| `BACKOFF_MS`        | 2000    | wait before the first retry, doubled for the next one                                         |
+| `DB_TIMEOUT_MS`     | 5000    | a call to Postgres fails when it gets no answer for this long (the migration gets 10 minutes) |
+| `API_PORT`          | 8080    | port of the API on the host                                                                   |
+| `DB_PORT`           | 54329   | port of Postgres on the host                                                                  |

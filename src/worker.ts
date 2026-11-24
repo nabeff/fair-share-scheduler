@@ -7,7 +7,7 @@
 
 import { hostname } from "node:os";
 import { config } from "./config.ts";
-import { connect, sleep } from "./db.ts";
+import { connect, refusedByPostgres, sleep } from "./db.ts";
 
 // In a container the hostname and the pid (always 1) survive a restart, so a
 // worker that crashed comes back under the same id. See heartbeat().
@@ -21,8 +21,11 @@ interface ClaimedJob {
   max_attempts: number;
 }
 
-// The jobs this process is running right now.
+// The jobs this process is working on right now. Each one takes a slot, and
+// every heartbeat extends its lease.
 const running = new Set<ClaimedJob>();
+// Finished jobs whose result Postgres has not taken yet.
+let unsavedResults = 0;
 let stopping = false;
 
 // FOR UPDATE SKIP LOCKED lets many workers claim at the same time without
@@ -48,11 +51,10 @@ async function claim(limit: number): Promise<ClaimedJob[]> {
   return rows;
 }
 
-// Tell the scheduler we are alive, and keep the lease on our running jobs.
-// Only the jobs this process holds in memory are extended, not every job
-// stored under our id. A worker that restarts under the same id must not
-// keep the jobs of its previous life alive: they expire and are retried.
-// The same goes for a job whose result could not be saved.
+// Tell the scheduler we are alive, and keep the lease on the jobs we are
+// working on. Only those are extended, not every job stored under our id. A
+// worker that restarts under the same id must not keep the jobs of its
+// previous life alive: they expire and are retried.
 async function heartbeat(): Promise<void> {
   const slots = stopping ? 0 : config.workerSlots;
   await db.query(
@@ -127,20 +129,73 @@ async function report(job: ClaimedJob, error: string | null): Promise<void> {
   }
 }
 
-// Postgres can be away for a moment. Keep trying for a while. If we give up,
-// the lease expires and the job runs again: delivery is at least once.
-async function reportWithRetry(
+// Postgres can be away for a while. A finished job is not thrown away for
+// that: the worker offers the result again every second until Postgres
+// answers. Every answer ends the loop:
+//   - the result is saved,
+//   - the fence in report() says the job is no longer ours,
+//   - Postgres refuses the statement itself, and would refuse it every time.
+// The lease is not extended while we wait. A result that is not saved in time,
+// or never, is not a lost job: the scheduler takes the job back and it runs
+// again (delivery is at least once).
+async function reportUntilAnswered(
   job: ClaimedJob,
   error: string | null,
 ): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
+  for (let failures = 0; ; failures++) {
     try {
       return await report(job, error);
     } catch (err) {
-      if (attempt === 5) throw err;
-      await sleep(500 * attempt);
+      const reason = err instanceof Error ? err.message : String(err);
+      if (refusedByPostgres(err)) {
+        console.error(
+          `job ${job.id}: result refused, the job is left to its lease:`,
+          reason,
+        );
+        return;
+      }
+      if (failures === 0) {
+        console.error(`job ${job.id}: result not saved yet, retrying:`, reason);
+      }
+      await sleep(1000);
     }
   }
+}
+
+// A worker that is asked to stop gives back the jobs it cannot finish in
+// time. They return to the front of their queue at once and the attempt is
+// not counted: being stopped is not a failure of the job. The tenant is still
+// charged for the worker time it used.
+async function handBack(jobs: ClaimedJob[]): Promise<void> {
+  const { rows } = await db.query(
+    `WITH returned AS (
+       UPDATE jobs
+       SET status = 'pending',
+           attempts = attempts - 1,
+           last_error = 'handed back: its worker was stopped',
+           lease_expires_at = NULL
+       WHERE worker_id = $1 AND status = 'running' AND id = ANY($2::bigint[])
+       RETURNING tenant_id,
+                 extract(epoch FROM now() - started_at)::float8 AS seconds
+     ),
+     used AS (
+       SELECT tenant_id, sum(seconds) AS seconds
+       FROM returned
+       GROUP BY tenant_id
+     ),
+     charged AS (
+       UPDATE tenants t
+       SET vtime = t.vtime + used.seconds / t.weight
+       FROM used
+       WHERE t.id = used.tenant_id
+     )
+     SELECT count(*)::int AS jobs FROM returned`,
+    [workerId, jobs.map((job) => job.id)],
+  );
+  // Fewer than we held, if the scheduler took some back in the meantime.
+  console.log(
+    `worker ${workerId}: handed back ${rows[0].jobs} unfinished jobs`,
+  );
 }
 
 async function run(job: ClaimedJob): Promise<void> {
@@ -150,14 +205,11 @@ async function run(job: ClaimedJob): Promise<void> {
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
-  try {
-    await reportWithRetry(job, error);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    console.error(`job ${job.id}: result not saved, it will run again`, reason);
-  } finally {
-    running.delete(job);
-  }
+  // The work is over and the slot is free. What is left is to save the result.
+  running.delete(job);
+  unsavedResults += 1;
+  await reportUntilAnswered(job, error);
+  unsavedResults -= 1;
 }
 
 async function main(): Promise<void> {
@@ -188,11 +240,18 @@ async function main(): Promise<void> {
   }
 
   // Shutdown. Take no new jobs, tell the scheduler our slots are gone, and
-  // give running jobs a moment to finish. Whatever is still running after
-  // that is recovered through its lease, like a crash.
+  // give running jobs a moment to finish and to save their result. Whatever
+  // is still running after that goes back to the queue. If even that fails,
+  // the lease recovers the jobs, like after a crash.
   await heartbeat().catch(() => {});
   const deadline = Date.now() + config.shutdownGraceMs;
-  while (running.size > 0 && Date.now() < deadline) await sleep(50);
+  const busy = () => running.size > 0 || unsavedResults > 0;
+  while (busy() && Date.now() < deadline) await sleep(50);
+  if (running.size > 0) {
+    await handBack([...running]).catch((err) =>
+      console.error("hand back failed:", err.message),
+    );
+  }
   clearInterval(beat);
   await db
     .query("DELETE FROM workers WHERE id = $1", [workerId])

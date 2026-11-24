@@ -1,6 +1,12 @@
 // Helpers for the tests that need a real Postgres and real processes.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import {
+  connect as openSocket,
+  createServer,
+  type AddressInfo,
+  type Socket,
+} from "node:net";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { config } from "../src/config.ts";
@@ -75,6 +81,69 @@ export function start(
     },
     stdio: ["ignore", "ignore", "inherit"],
   });
+}
+
+/**
+ * A small TCP proxy in front of the test database. A process started with
+ * its url reaches Postgres through it, so a test can take the database away
+ * from that process alone, while the test itself still sees it.
+ */
+export async function databaseProxy(databaseUrl = testDatabaseUrl) {
+  const target = new URL(databaseUrl);
+  const sockets = new Set<Socket>();
+  // Connections caught by a freeze. They stay silent for good, like a
+  // connection whose other end is gone without saying goodbye.
+  const silent = new Set<Socket>();
+  let down = false;
+  let frozen = false;
+
+  const forward = (from: Socket, to: Socket) => {
+    sockets.add(from);
+    if (frozen) silent.add(from);
+    from.on("data", (chunk) => {
+      if (!silent.has(from)) to.write(chunk);
+    });
+    from.on("error", () => {}); // a cut connection is what we are here for
+    from.on("close", () => {
+      sockets.delete(from);
+      to.destroy();
+    });
+  };
+  const server = createServer((client) => {
+    if (down) return void client.destroy();
+    const postgres = openSocket(Number(target.port || 5432), target.hostname);
+    forward(client, postgres);
+    forward(postgres, client);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const url = new URL(databaseUrl);
+  url.hostname = "127.0.0.1";
+  url.port = String((server.address() as AddressInfo).port);
+  const dropConnections = () => sockets.forEach((socket) => socket.destroy());
+
+  return {
+    url: url.href,
+    /** Postgres is down: open connections break, new ones are refused. */
+    cut() {
+      down = true;
+      dropConnections();
+    },
+    /** Postgres stops answering: connections open, but nothing comes back. */
+    freeze() {
+      frozen = true;
+      sockets.forEach((socket) => silent.add(socket));
+    },
+    /** New connections work again. */
+    restore() {
+      down = false;
+      frozen = false;
+    },
+    close() {
+      dropConnections();
+      server.close();
+    },
+  };
 }
 
 export async function submit(

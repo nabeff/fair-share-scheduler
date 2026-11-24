@@ -6,10 +6,10 @@
 //   4. let decide() choose who gets the free workers (src/fairshare.ts)
 //   5. mark that many of their oldest waiting jobs "ready" for the workers
 //
-// It keeps nothing in memory between two passes. Everything it knows comes
-// from Postgres, so it can crash and restart at any point without losing
-// anything. It only looks at job status and timestamps, never at the content
-// of a job, so it cannot know how long a job will take.
+// It keeps no job and no tenant in memory between two passes. Everything it
+// knows about them comes from Postgres, so it can crash and restart at any
+// point without losing anything. It only looks at job status and timestamps,
+// never at the content of a job, so it cannot know how long a job will take.
 
 import type { PoolClient } from "pg";
 import { config } from "./config.ts";
@@ -17,7 +17,7 @@ import { connect, sleep, type Db } from "./db.ts";
 import { decide, type Decision, type TenantSnapshot } from "./fairshare.ts";
 
 // Any number works, two scheduler instances only have to agree on it.
-const SCHEDULER_LOCK = 7_316_001;
+export const SCHEDULER_LOCK = 7_316_001;
 
 // Every query of a pass is written to read a few rows through an index.
 // Postgres picks its plan from table statistics, and a queue changes too
@@ -33,9 +33,16 @@ const PLAN_SETTINGS = [
   "SET LOCAL jit = off",
 ].join("; ");
 
-/** One scheduler pass. Returns the snapshot it decided on, or null if skipped. */
-export async function pass(db: Db): Promise<PassResult | null> {
+/**
+ * One scheduler pass. Returns the snapshot it decided on, or null if skipped.
+ * With judgeLeases false, step 1 is left out: see leaseGrace() for when.
+ */
+export async function pass(
+  db: Db,
+  judgeLeases = true,
+): Promise<PassResult | null> {
   const tx = await db.connect();
+  let failed = false;
   try {
     await tx.query(`BEGIN; ${PLAN_SETTINGS}`);
 
@@ -50,7 +57,7 @@ export async function pass(db: Db): Promise<PassResult | null> {
       return null;
     }
 
-    await reclaimExpiredLeases(tx);
+    if (judgeLeases) await reclaimExpiredLeases(tx);
     const totalSlots = await liveSlots(tx);
     const tenants = await loadTenants(tx, totalSlots);
     const decision = decide(tenants, totalSlots);
@@ -59,10 +66,13 @@ export async function pass(db: Db): Promise<PassResult | null> {
     await tx.query("COMMIT");
     return { totalSlots, tenants, decision };
   } catch (err) {
-    await tx.query("ROLLBACK").catch(() => {});
+    failed = true;
     throw err;
   } finally {
-    tx.release();
+    // After a failure the connection is closed instead of reused: it may be
+    // broken, or still waiting for an answer that never comes. Closing it
+    // also rolls the transaction back and frees the lock.
+    tx.release(failed);
   }
 }
 
@@ -188,6 +198,32 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
   }
 }
 
+/**
+ * A database outage is not a crash of every worker. If the scheduler could
+ * not reach Postgres, the workers could not either: their leases ran out,
+ * but nobody died. So once Postgres answers again, no job is taken back for
+ * one lease. A worker that is alive extends its leases and saves its results
+ * in that time, and only the jobs of workers that are really gone are left.
+ * A scheduler that starts waits the same way: it does not know what happened
+ * before it started.
+ *
+ * The price: crash recovery waits too. A worker that really died is noticed
+ * one lease later, and not at all while passes keep failing.
+ */
+export function leaseGrace(leaseMs: number, now = () => performance.now()) {
+  let endsAt = now() + leaseMs;
+  return {
+    /** True when leases may be judged again. */
+    isOver: () => now() >= endsAt,
+    /** Postgres did not answer: no end in sight until it does. */
+    passFailed: () => void (endsAt = Infinity),
+    /** Postgres answered. After a failure, the lease of grace starts here. */
+    passWorked: () => {
+      if (endsAt === Infinity) endsAt = now() + leaseMs;
+    },
+  };
+}
+
 /** One line showing who holds the workers right now, for the logs. */
 function describe({ totalSlots, tenants }: PassResult): string {
   const busy = tenants
@@ -207,10 +243,12 @@ async function main(): Promise<void> {
   let lastPicture = "";
   let passes = 0;
   let passMs = 0;
+  const grace = leaseGrace(config.leaseMs);
   while (!stopping) {
     try {
       const startedAt = performance.now();
-      const result = await pass(db);
+      const result = await pass(db, grace.isOver());
+      grace.passWorked();
       passMs += performance.now() - startedAt;
       passes += 1;
       // Every few seconds, when the picture changed: who holds the workers,
@@ -228,6 +266,7 @@ async function main(): Promise<void> {
       await sleep(config.tickMs);
     } catch (err) {
       console.error("scheduler pass failed:", (err as Error).message);
+      grace.passFailed();
       await sleep(1000);
     }
   }

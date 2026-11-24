@@ -3,13 +3,16 @@
 
 import { fileURLToPath } from "node:url";
 
-// A setting that is not a number stops the process at start and names the
-// variable. Without this check it would run with NaN.
+// A setting that is not a whole number stops the process at start and names
+// the variable. Without this check "abc" would run as NaN, and 2500.5 would
+// fail later, in every SQL statement that takes the setting as an integer.
 const number = (name: string, fallback: number): number => {
   const raw = process.env[name];
   const value = raw === undefined || raw === "" ? fallback : Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} must be a number of 0 or more, got "${raw}"`);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(
+      `${name} must be a whole number of 0 or more, got "${raw}"`,
+    );
   }
   return value;
 };
@@ -18,6 +21,9 @@ export const config = {
   databaseUrl:
     process.env.DATABASE_URL ??
     "postgres://postgres:postgres@localhost:54329/scheduler",
+
+  // No call to Postgres waits longer than this. See src/db.ts.
+  dbTimeoutMs: number("DB_TIMEOUT_MS", 5000),
 
   // Tenants and weights are seeded from this file on every start.
   tenantsFile:

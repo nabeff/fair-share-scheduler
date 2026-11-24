@@ -37,6 +37,9 @@ services:
     command: ["node", "src/migrate.ts"]
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/scheduler
+      # A schema change on a large table can take longer than the 5 seconds
+      # that a call to Postgres gets everywhere else.
+      DB_TIMEOUT_MS: "600000"
     depends_on:
       db:
         condition: service_healthy
