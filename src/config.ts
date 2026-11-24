@@ -3,8 +3,16 @@
 
 import { fileURLToPath } from "node:url";
 
-const number = (name: string, fallback: number): number =>
-  Number(process.env[name] ?? fallback);
+// A setting that is not a number stops the process at start and names the
+// variable. Without this check it would run with NaN.
+const number = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  const value = raw === undefined || raw === "" ? fallback : Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a number of 0 or more, got "${raw}"`);
+  }
+  return value;
+};
 
 export const config = {
   databaseUrl:

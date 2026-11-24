@@ -86,13 +86,13 @@ Where things are:
 docker compose run --rm test
 ```
 
-41 tests:
+44 tests:
 
 - `api.test.ts`: the real API process on a real Postgres. Submit and read back, unknown tenant, unknown job, and a request that can never work gets 400, not the 503 that asks for a retry.
 - `fairshare.test.ts`: the "pick the next tenant" logic. Weights, the cap, the idle rule, a tenant alone.
 - `simulation.test.ts`: the same function driving a simulated pool. A flood, weights 1, 2, 4, 5 minute jobs, 60 tenants.
 - `recovery.test.ts`: a real scheduler and real workers on a real Postgres. A worker is killed with SIGKILL in the middle of a job and the job is retried. A job that fails once succeeds on the retry. A job that always fails is `dead` after 3 attempts.
-- `worker.test.ts` and `scheduler.test.ts`: the retry backoff, and a check that the scheduling code never mentions the payload.
+- `worker.test.ts`, `scheduler.test.ts` and `config.test.ts`: the retry backoff, a check that the scheduling code never mentions the payload, and a setting that is not a number stops the process at start.
 
 Without Docker: `npm install && npm test`, with Node 24 or newer. The database tests use the Postgres of `docker compose up -d db` on port 54329, and are skipped when it is not reachable.
 
