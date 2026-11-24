@@ -41,5 +41,12 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
 
+  # Several separate worker processes. Each one runs up to WORKER_SLOTS jobs at once.
+  worker:
+    <<: *app
+    command: ["node", "src/worker.ts"]
+    deploy:
+      replicas: 4
+
 volumes:
   pgdata:

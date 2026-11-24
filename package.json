@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "api": "node src/api.ts",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "worker": "node src/worker.ts"
   },
   "dependencies": {
     "fastify": "^5.12.8",
