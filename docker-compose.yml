@@ -41,6 +41,11 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
 
+  # Decides which tenant runs next. A second replica would act as a standby.
+  scheduler:
+    <<: *app
+    command: ["node", "src/scheduler.ts"]
+
   # Several separate worker processes. Each one runs up to WORKER_SLOTS jobs at once.
   worker:
     <<: *app

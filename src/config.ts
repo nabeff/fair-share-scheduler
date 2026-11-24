@@ -17,6 +17,10 @@ export const config = {
   // API
   port: number("PORT", 8080),
 
+  // Scheduler
+  tickMs: number("TICK_MS", 20), // pause between two passes
+  logEveryMs: number("LOG_EVERY_MS", 5000),
+
   // Worker
   workerSlots: number("WORKER_SLOTS", 5), // jobs one process runs at once
   pollMs: number("POLL_MS", 20), // how often a free worker looks for a job
