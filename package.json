@@ -11,7 +11,8 @@
     "migrate": "node src/migrate.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "api": "node src/api.ts"
+    "api": "node src/api.ts",
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "fastify": "^5.12.8",
