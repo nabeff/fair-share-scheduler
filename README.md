@@ -106,6 +106,8 @@ docker compose run --rm loadtest weights   # only the second
 
 The script submits jobs through the HTTP API and measures from the job timestamps in Postgres. It prints a report and writes it to `results/` as text and CSV. **It empties the job table before and after.**
 
+It measures the services that are running. After a code change, rebuild them first: `docker compose up -d --build`.
+
 The numbers below come from a real run on a laptop (Docker VM with 6 CPUs, pool of 20 worker slots). The files of that run are in [`results/`](results).
 
 ### Scenario 1: one tenant floods
