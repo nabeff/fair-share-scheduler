@@ -186,16 +186,26 @@ async function main(): Promise<void> {
   console.log(`scheduler started, one pass every ${config.tickMs} ms`);
 
   let lastLog = 0;
-  let lastLine = "";
+  let lastPicture = "";
+  let passes = 0;
+  let passMs = 0;
   while (!stopping) {
     try {
+      const startedAt = performance.now();
       const result = await pass(db);
-      // Print the picture every few seconds, only when it changed.
+      passMs += performance.now() - startedAt;
+      passes += 1;
+      // Every few seconds, when the picture changed: who holds the workers,
+      // and how long a pass takes on average.
       if (result && Date.now() - lastLog >= config.logEveryMs) {
-        const line = describe(result);
-        if (line !== lastLine) console.log(line);
-        lastLine = line;
+        const picture = describe(result);
+        if (picture !== lastPicture) {
+          console.log(`${picture} (pass: ${(passMs / passes).toFixed(1)} ms)`);
+        }
+        lastPicture = picture;
         lastLog = Date.now();
+        passes = 0;
+        passMs = 0;
       }
       await sleep(config.tickMs);
     } catch (err) {
