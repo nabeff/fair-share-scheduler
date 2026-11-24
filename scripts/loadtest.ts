@@ -387,9 +387,11 @@ async function flood(): Promise<void> {
     "tenant,jobs,wait_p50_ms,wait_p95_ms,wait_max_ms,all_done_ms\n" +
       waits.rows
         .map((r) =>
-          [r.tenant_id, r.jobs, r.p50, r.p95, r.max, r.all_done]
-            .map((v) => (typeof v === "number" ? v.toFixed(1) : v))
-            .join(","),
+          [
+            r.tenant_id,
+            r.jobs,
+            ...[r.p50, r.p95, r.max, r.all_done].map((ms) => ms.toFixed(1)),
+          ].join(","),
         )
         .join("\n") +
       "\n",

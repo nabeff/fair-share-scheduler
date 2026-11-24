@@ -60,6 +60,7 @@ services:
     <<: *app
     command: ["npm", "test"]
     profiles: ["tools"]
+    pull_policy: build # always run the current code
     restart: "no"
 
   # The load test. It empties the job table, then prints its report and
@@ -69,6 +70,7 @@ services:
     <<: *app
     entrypoint: ["node", "scripts/loadtest.ts"]
     profiles: ["tools"]
+    pull_policy: build # always run the current code
     restart: "no"
     user: root # so it can write into the mounted ./results on any host
     environment:
