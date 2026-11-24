@@ -7,9 +7,10 @@ import { sleep } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 
 // Tests get their own database on the same server, so they never touch the
-// jobs of a running system.
+// jobs of a running system. Test files run in parallel: a second file that
+// needs the database passes a name of its own.
 const TEST_DATABASE = "scheduler_test";
-const urlFor = (database: string) =>
+export const urlFor = (database: string) =>
   config.databaseUrl.replace(/\/[^/]+$/, `/${database}`);
 export const testDatabaseUrl = urlFor(TEST_DATABASE);
 
@@ -29,19 +30,21 @@ export async function postgresIsUp(): Promise<boolean> {
 }
 
 /** An empty test database with the schema and the seeded tenants. */
-export async function freshDatabase(): Promise<pg.Pool> {
+export async function freshDatabase(
+  database = TEST_DATABASE,
+): Promise<pg.Pool> {
   const admin = new pg.Client({ connectionString: urlFor("postgres") });
   await admin.connect();
   const found = await admin.query(
     "SELECT 1 FROM pg_database WHERE datname = $1",
-    [TEST_DATABASE],
+    [database],
   );
   if (found.rowCount === 0) {
-    await admin.query(`CREATE DATABASE ${TEST_DATABASE}`);
+    await admin.query(`CREATE DATABASE ${database}`);
   }
   await admin.end();
 
-  const db = new pg.Pool({ connectionString: testDatabaseUrl, max: 4 });
+  const db = new pg.Pool({ connectionString: urlFor(database), max: 4 });
   await db.query("DROP TABLE IF EXISTS jobs, workers, tenants");
   await migrate(db);
   return db;
@@ -56,9 +59,9 @@ const FAST_SETTINGS = {
   LOG_EVERY_MS: "3600000",
 };
 
-/** Starts a real scheduler or worker process on the test database. */
+/** Starts a real API, scheduler or worker process on the test database. */
 export function start(
-  script: "scheduler" | "worker",
+  script: "api" | "scheduler" | "worker",
   settings: Record<string, string> = {},
 ): ChildProcess {
   const file = new URL(`../src/${script}.ts`, import.meta.url).pathname;
@@ -66,8 +69,8 @@ export function start(
     env: {
       ...process.env,
       ...FAST_SETTINGS,
-      ...settings,
       DATABASE_URL: testDatabaseUrl,
+      ...settings,
     },
     stdio: ["ignore", "ignore", "inherit"],
   });

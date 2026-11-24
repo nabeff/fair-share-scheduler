@@ -78,7 +78,7 @@ Where things are:
 | `src/api.ts`          | `POST /jobs` and `GET /jobs/:id`                                                |
 | `db/schema.sql`       | three tables: `tenants`, `jobs`, `workers`                                      |
 | `scripts/loadtest.ts` | the load test                                                                   |
-| `test/`               | unit tests, a simulation of the pool, crash tests with real processes           |
+| `test/`               | unit tests, a simulation of the pool, API and crash tests with real processes   |
 
 ## Tests
 
@@ -86,8 +86,9 @@ Where things are:
 docker compose run --rm test
 ```
 
-36 tests:
+41 tests:
 
+- `api.test.ts`: the real API process on a real Postgres. Submit and read back, unknown tenant, unknown job, and a request that can never work gets 400, not the 503 that asks for a retry.
 - `fairshare.test.ts`: the "pick the next tenant" logic. Weights, the cap, the idle rule, a tenant alone.
 - `simulation.test.ts`: the same function driving a simulated pool. A flood, weights 1, 2, 4, 5 minute jobs, 60 tenants.
 - `recovery.test.ts`: a real scheduler and real workers on a real Postgres. A worker is killed with SIGKILL in the middle of a job and the job is retried. A job that fails once succeeds on the retry. A job that always fails is `dead` after 3 attempts.

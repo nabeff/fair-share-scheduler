@@ -74,12 +74,20 @@ app.get("/health", async () => {
   return { ok: true };
 });
 
-// A request we could not store is answered with 503 so the client retries.
-// We never answer 201 for a job that is not safely in Postgres.
+// A mistake of the client (bad JSON, a missing field, a body that is too
+// large) keeps its 4xx status. Anything else means we could not store or read
+// the job: 503, so the client retries. We never answer 201 for a job that is
+// not safely in Postgres.
 app.setErrorHandler(
-  (err: Error & { validation?: unknown }, _request, reply) => {
-    if (err.validation) {
-      return reply.code(400).send({ error: err.message });
+  (err: Error & { statusCode?: number; code?: string }, _request, reply) => {
+    const status = err.statusCode ?? 500;
+    if (status >= 400 && status < 500) {
+      return reply.code(status).send({ error: err.message });
+    }
+    // Postgres class 22, a data error: the payload is valid JSON that a jsonb
+    // column cannot store (a NUL character). A retry would never help.
+    if (err.code?.startsWith("22")) {
+      return reply.code(400).send({ error: "payload cannot be stored" });
     }
     console.error("request failed:", err.message);
     return reply.code(503).send({ error: "temporarily unavailable, retry" });
