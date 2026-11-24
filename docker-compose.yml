@@ -15,9 +15,10 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: scheduler
     # Published on an unusual host port so it never clashes with a Postgres
-    # already running on the machine. Only tests run from the host need it.
+    # already running on the machine. Only tests run from the host need it,
+    # so it is reachable from this machine only.
     ports:
-      - "${DB_PORT:-54329}:5432"
+      - "127.0.0.1:${DB_PORT:-54329}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     # Checked over TCP on purpose. While the image sets up a new volume, a
