@@ -41,6 +41,13 @@ describe("a lease that expired", { skip }, () => {
     return rows[0].id as string;
   }
 
+  async function vtimeOf(tenantId: string) {
+    const { rows } = await db.query("SELECT vtime FROM tenants WHERE id = $1", [
+      tenantId,
+    ]);
+    return rows[0].vtime as number;
+  }
+
   test("the job goes back to the queue, the attempt stays counted", async () => {
     const id = await abandonedJob(1, -1);
     await pass(db);
@@ -52,11 +59,13 @@ describe("a lease that expired", { skip }, () => {
   });
 
   test("the tenant is charged for the time the job held a worker", async () => {
-    const { rows } = await db.query(
-      "SELECT vtime FROM tenants WHERE id = 'small-1'",
-    );
+    const usedBefore = await vtimeOf("small-1");
+    await abandonedJob(1, -1);
+    await pass(db);
+
     // 30 seconds on a tenant of weight 1.
-    assert.ok(rows[0].vtime >= 30 && rows[0].vtime < 31, `${rows[0].vtime}`);
+    const charged = (await vtimeOf("small-1")) - usedBefore;
+    assert.ok(charged >= 30 && charged < 31, `${charged}`);
   });
 
   test("a job whose lease is still valid is left alone", async () => {
