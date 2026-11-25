@@ -2,7 +2,7 @@
 
 Many tenants share one pool of workers. While several tenants have jobs waiting, each gets worker time in proportion to its weight, so one tenant can queue 100,000 jobs without making the others wait.
 
-TypeScript on Node 24, with Postgres as the only storage and the queue. The scheduling logic is in [`src/fairshare.ts`](src/fairshare.ts). The design, guarantees and limits are in [docs/design.md](docs/design.md), with two diagrams in [docs/architecture.md](docs/architecture.md). [docs/spec.md](docs/spec.md) lists each requirement and the test that checks it.
+TypeScript on Node 24, with Postgres as the only storage and the queue. The scheduling logic is in [`src/fairshare.ts`](src/fairshare.ts). The rest is in [`docs/`](docs): the [design](docs/design.md), the [architecture](docs/architecture.md), a [spec](docs/spec.md) that maps each requirement to its test, the [API](docs/api.md) and [operations](docs/operations.md).
 
 ## Run it
 
