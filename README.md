@@ -105,7 +105,7 @@ Where things are:
 ## Tests
 
 ```bash
-docker compose run --rm test       # the scheduler: 62 tests
+docker compose run --rm test       # the scheduler: 63 tests
 docker compose run --rm web-test   # the live page: 72 tests
 ```
 

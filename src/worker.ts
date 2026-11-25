@@ -35,24 +35,31 @@ let stopping = false;
 // the answer to this statement is lost (a timeout), the jobs are ours in
 // Postgres but we do not know them. Nobody extends their lease, so the
 // scheduler takes them back after one lease, with the attempt used.
+//
+// The jobs are picked first, once, and then updated. MATERIALIZED says so
+// to Postgres. With the pick written inside "WHERE id IN (...)", Postgres
+// may run it again for every row, each time skipping the rows it has just
+// taken, and the claim takes more jobs than the worker has slots.
+export const CLAIM_SQL = `
+  WITH picked AS MATERIALIZED (
+    SELECT id FROM jobs
+    WHERE status = 'ready'
+    ORDER BY ready_at, id
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE jobs
+  SET status = 'running',
+      worker_id = $1,
+      attempts = attempts + 1,
+      started_at = now(),
+      lease_expires_at = now() + $2::int * interval '1 ms'
+  FROM picked
+  WHERE jobs.id = picked.id
+  RETURNING jobs.id, jobs.payload, jobs.attempts, jobs.max_attempts`;
+
 async function claim(limit: number): Promise<ClaimedJob[]> {
-  const { rows } = await db.query(
-    `UPDATE jobs
-     SET status = 'running',
-         worker_id = $1,
-         attempts = attempts + 1,
-         started_at = now(),
-         lease_expires_at = now() + $2::int * interval '1 ms'
-     WHERE id IN (
-       SELECT id FROM jobs
-       WHERE status = 'ready'
-       ORDER BY ready_at, id
-       LIMIT $3
-       FOR UPDATE SKIP LOCKED
-     )
-     RETURNING id, payload, attempts, max_attempts`,
-    [workerId, config.leaseMs, limit],
-  );
+  const { rows } = await db.query(CLAIM_SQL, [workerId, config.leaseMs, limit]);
   return rows;
 }
 
