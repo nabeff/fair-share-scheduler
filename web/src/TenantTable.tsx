@@ -10,10 +10,6 @@ export function TenantTable({ history }: { history: History }) {
   return (
     <section className="card tenants pool-data" aria-labelledby="tenants-title">
       <h2 id="tenants-title">Tenants</h2>
-      <p>
-        Weight 4 gets four times the workers of weight 1. Share is how much
-        worker time each tenant got in the last minute.
-      </p>
 
       <div className="table-scroll">
         <table>
@@ -23,7 +19,7 @@ export function TenantTable({ history }: { history: History }) {
               <th scope="col">Weight</th>
               <th scope="col">Running</th>
               <th scope="col">Waiting</th>
-              <th scope="col">Share</th>
+              <th scope="col">Share of last minute</th>
             </tr>
           </thead>
           <tbody>

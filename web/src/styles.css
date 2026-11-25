@@ -129,16 +129,17 @@ p {
   grid-template-columns: minmax(0, 1fr) 340px;
   grid-template-rows: auto 1fr;
   gap: 20px;
-  align-items: start;
 }
 
 .chart-card {
   grid-area: chart;
 }
 
+/* The last card grows, so both columns end on the same line. */
 .tools {
   display: grid;
   grid-area: tools;
+  grid-template-rows: auto 1fr;
   gap: 20px;
 }
 
@@ -155,6 +156,7 @@ p {
 
   .tools {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    grid-template-rows: none;
     align-items: start;
   }
 }
@@ -643,10 +645,12 @@ button:disabled {
   cursor: default;
 }
 
-/* Reserve a line so the card doesn't jump. */
 .report {
-  min-height: 21px;
   margin-top: 14px;
+}
+
+.report:empty {
+  margin: 0;
 }
 
 .facts {
