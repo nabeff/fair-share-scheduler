@@ -1,5 +1,3 @@
-// Helpers for the tests that need a real Postgres and real processes.
-
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   connect as openSocket,
@@ -13,15 +11,13 @@ import { config } from "../src/config.ts";
 import { sleep } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 
-// Tests get their own database on the same server, so they never touch the
-// jobs of a running system. Test files run in parallel: a second file that
-// needs the database passes a name of its own.
+// Tests use their own database, never the running system's.
 const TEST_DATABASE = "scheduler_test";
 export const urlFor = (database: string) =>
   config.databaseUrl.replace(/\/[^/]+$/, `/${database}`);
 export const testDatabaseUrl = urlFor(TEST_DATABASE);
 
-/** True if Postgres answers. Tests that need it are skipped otherwise. */
+/** Tests that need Postgres are skipped without it. */
 export async function postgresIsUp(): Promise<boolean> {
   const client = new pg.Client({
     connectionString: urlFor("postgres"),
@@ -36,7 +32,6 @@ export async function postgresIsUp(): Promise<boolean> {
   }
 }
 
-/** An empty test database with the schema and the seeded tenants. */
 export async function freshDatabase(
   database = TEST_DATABASE,
 ): Promise<pg.Pool> {
@@ -57,7 +52,7 @@ export async function freshDatabase(
   return db;
 }
 
-// Short timings, so a crash is noticed in about a second instead of ten.
+// Short timings so tests notice a crash in about a second.
 const FAST_SETTINGS = {
   LEASE_MS: "1500",
   HEARTBEAT_MS: "300",
@@ -66,7 +61,6 @@ const FAST_SETTINGS = {
   LOG_EVERY_MS: "3600000",
 };
 
-/** Starts a real API, scheduler or worker process on the test database. */
 export function start(
   script: "api" | "scheduler" | "worker",
   settings: Record<string, string> = {},
@@ -83,16 +77,11 @@ export function start(
   });
 }
 
-/**
- * A small TCP proxy in front of the test database. A process started with
- * its url reaches Postgres through it, so a test can take the database away
- * from that process alone, while the test itself still sees it.
- */
+/** A TCP proxy, so a test can cut one process off from Postgres. */
 export async function databaseProxy(databaseUrl = testDatabaseUrl) {
   const target = new URL(databaseUrl);
   const sockets = new Set<Socket>();
-  // Connections caught by a freeze. They stay silent for good, like a
-  // connection whose other end is gone without saying goodbye.
+  // Frozen connections stay silent for good.
   const silent = new Set<Socket>();
   let down = false;
   let frozen = false;
@@ -124,17 +113,16 @@ export async function databaseProxy(databaseUrl = testDatabaseUrl) {
 
   return {
     url: url.href,
-    /** Postgres is down: open connections break, new ones are refused. */
+    /** Like Postgres being down. */
     cut() {
       down = true;
       dropConnections();
     },
-    /** Postgres stops answering: connections open, but nothing comes back. */
+    /** Like Postgres hanging. */
     freeze() {
       frozen = true;
       sockets.forEach((socket) => silent.add(socket));
     },
-    /** New connections work again. */
     restore() {
       down = false;
       frozen = false;
@@ -163,7 +151,6 @@ export async function getJob(db: pg.Pool, id: string) {
   return rows[0];
 }
 
-/** For waitFor: gives the job once it has reached the status. */
 export function jobIs(db: pg.Pool, id: string, status: string) {
   return async () => {
     const job = await getJob(db, id);
@@ -171,7 +158,7 @@ export function jobIs(db: pg.Pool, id: string, status: string) {
   };
 }
 
-/** Polls until the check returns a value. Fails the test after the timeout. */
+/** Polls until the check returns a value, or fails after the timeout. */
 export async function waitFor<T>(
   what: string,
   check: () => Promise<T | undefined>,

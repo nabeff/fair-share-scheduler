@@ -4,30 +4,19 @@ import { count, list } from "./format.ts";
 import { sendAll } from "./sendAll.ts";
 import { TenantPicker } from "./TenantPicker.tsx";
 
-/** Jobs of one tenant that are sent together. */
 interface Batch {
   tenant: string;
   jobs: number;
-  /** How long job number `index` of the batch takes, in ms. */
   ms: (index: number) => number;
 }
 
 /**
- * The length of job number `index` of an example: between 1 and 3 seconds.
- * Real jobs are not all one length. Jobs of one length that start together
- * also end together, and then the whole pool changes hands in one instant.
- * The length follows from the number, without chance, so an example sends
- * the same jobs every time. The step of 1237 ms walks through the 2 seconds
- * in big jumps: two jobs in a row never take about the same time.
+ * 1 to 3 s, same every time. Equal lengths would all end at once and the
+ * whole pool would change hands in one go.
  */
 const mixed = (index: number) => 1000 + ((index * 1237) % 2001);
 
-/**
- * Batches that are ready to send. The first two tell the story of the brief:
- * one tenant floods the queue, then a small tenant arrives. The third shows
- * the weights. They name tenants of tenants.json, and an example is only
- * offered while its tenants exist.
- */
+// Flood, then a small tenant arrives (the brief's story), then the weights.
 const EXAMPLES: { label: string; batches: Batch[] }[] = [
   {
     label: "Flood supermarket with 600 jobs",
@@ -47,7 +36,6 @@ const EXAMPLES: { label: string; batches: Batch[] }[] = [
   },
 ];
 
-/** What the line under the form says. */
 type Report =
   | { state: "sending"; done: number; total: number }
   | { state: "stored"; done: number; tenants: string[] }
@@ -71,19 +59,13 @@ function words(report: Report): string {
 }
 
 interface Props {
-  /** The tenants to choose from. Empty until the API has named them. */
   tenants: string[];
-  /** Called after a batch with the id of its first job. */
   onStored?: (firstJobId: string) => void;
 }
 
-/**
- * Submits jobs the way any client does: one POST /jobs for each. The page has
- * no door of its own into the scheduler.
- */
+/** One POST /jobs per job, like any client. */
 export function SubmitForm({ tenants, onStored }: Props) {
   const [report, setReport] = useState<Report | null>(null);
-  // The batch that is running, if any. Aborting it stops the batch.
   const running = useRef<AbortController | null>(null);
   useEffect(() => () => running.current?.abort(), []);
 
@@ -102,17 +84,15 @@ export function SubmitForm({ tenants, onStored }: Props) {
     ]);
   }
 
-  /** Sends the batches one after the other, and reports on all of them. */
   async function send(batches: Batch[]) {
     const total = batches.reduce((sum, batch) => sum + batch.jobs, 0);
     const stop = new AbortController();
     running.current = stop;
     setReport({ state: "sending", done: 0, total });
 
-    // A large batch gets thousands of answers a second. Repainting for a
-    // hundred of them is enough to see it move.
+    // Update the progress at most 100 times.
     const step = Math.ceil(total / 100);
-    // The job with the lowest id is the one that gets started first.
+    // The lowest id starts first.
     let first: bigint | undefined;
     let done = 0;
     let failure: { error: unknown } | undefined;

@@ -4,9 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   server: {
-    // The page only ever calls /api on its own address. While developing,
-    // Vite passes those calls on to the API that docker compose started.
-    // In Docker, nginx does the same (see nginx.conf).
+    // Same as nginx in Docker: forward /api to the API.
     proxy: {
       "/api": {
         target: "http://localhost:8080",

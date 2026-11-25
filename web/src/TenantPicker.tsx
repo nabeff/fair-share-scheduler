@@ -2,34 +2,26 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 interface Props {
   label: string;
-  /** The name under which a form sends the choice. */
   name: string;
-  /** The tenants to choose from. Empty until the API has named them. */
   options: string[];
 }
 
 /**
- * A list to choose one tenant from, drawn by the page instead of the browser.
- * It follows the "select only combobox" of the WAI-ARIA guide: the focus stays
- * on the box, the arrow keys move through the open list, Enter or Space
- * chooses, Escape closes, a letter jumps to the next tenant that starts with
- * it. The choice goes to the form through a hidden input.
+ * Custom select, following the WAI-ARIA "select-only combobox" pattern.
+ * The value goes to the form through a hidden input.
  */
 export function TenantPicker({ label, name, options }: Props) {
   const id = useId();
   const [chosen, setChosen] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  // The option the arrow keys are on while the list is open.
   const [active, setActive] = useState(0);
   const list = useRef<HTMLUListElement>(null);
 
-  // Until someone chooses, the first tenant is the choice. So is it when the
-  // chosen tenant is no longer in the list.
+  // Default to the first tenant.
   const value =
     chosen !== null && options.includes(chosen) ? chosen : (options[0] ?? "");
   const disabled = options.length === 0;
 
-  // A long list scrolls so the option the keys are on stays in view.
   useEffect(() => {
     if (!open) return;
     list.current
@@ -71,7 +63,7 @@ export function TenantPicker({ label, name, options }: Props) {
     }
   }
 
-  /** Moves to the next tenant after the current one that starts with `letter`. */
+  /** Type a letter to jump to the next tenant starting with it. */
   function jumpTo(letter: string) {
     const from = open ? active : options.indexOf(value);
     const order = [...options.keys()].map(
@@ -124,7 +116,7 @@ export function TenantPicker({ label, name, options }: Props) {
               className={
                 index === active ? "picker-option active" : "picker-option"
               }
-              // Keeps the focus on the box, so the list does not close first.
+              // Keep focus on the box, or blur closes the list first.
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setActive(index)}
               onClick={() => choose(index)}

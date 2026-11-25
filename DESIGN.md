@@ -13,10 +13,10 @@ Postgres is the only storage and also the queue. An **API** stores jobs, one **s
 
 **Measured** by `scripts/loadtest.ts` from job timestamps, on 20 worker slots:
 
-1. Share of worker seconds per tenant per 5 s bucket, against weight / total weight. Weights 1, 2, 4 got 14.3%, 28.5%, 57.2% (target 14.3, 28.6, 57.1), job lengths 20x apart.
-2. Wait from submit to start. Behind 99,280 queued jobs of one tenant, four small tenants started every job within 467 ms. One shared queue would have cost them 23 minutes.
+1. Share of worker seconds per tenant per 5 s bucket, against weight / total weight. Weights 1, 2, 4 got 14.3%, 28.6%, 57.1% (target 14.3, 28.6, 57.1), job lengths 20x apart.
+2. Wait from submit to start. Behind 99,004 queued jobs of one tenant, four small tenants started every job within 542 ms. One shared queue would have cost them 23 minutes.
 
-**Limits.** No preemption: a newcomer waits for running jobs to finish. That is the 467 ms above, or 5 minutes if the pool is full of long jobs. The tenant that held the pool is charged for it and then waits until the others have caught up. In simulations: about 1 s with short jobs, 30 minutes with 5 minute jobs and weights 1, 2, 4. Shares over the whole period match the weights.
+**Limits.** No preemption: a newcomer waits for running jobs to finish. That is the 542 ms above, or 5 minutes if the pool is full of long jobs. The tenant that held the pool is charged for it and then waits until the others have caught up. In simulations: about 1 s with short jobs, 30 minutes with 5 minute jobs and weights 1, 2, 4. Shares over the whole period match the weights.
 
 ## 2. Guarantees
 
@@ -32,7 +32,7 @@ Postgres is the only storage and also the queue. An **API** stores jobs, one **s
 - **A worker crashes or hangs.** Heartbeats stop, the lease expires after 10 s and the scheduler requeues its jobs at the front. Tested with a real kill. A worker that is stopped (deploy, scale down) gets 8 s to finish, then hands the rest back with no attempt used.
 - **The scheduler crashes.** It holds no job state. Running jobs finish, the API keeps accepting, nothing new starts until it returns. Two can run: an advisory lock picks one. One that freezes in the middle of a pass loses the lock after 5 s.
 - **The API crashes.** Submissions fail and clients retry. Queued and running jobs carry on.
-- **Postgres is down or silent.** No call waits longer than 5 s: the API answers 503, scheduler and workers retry. Workers keep finished results until Postgres takes them, and after an outage the scheduler waits one lease before it judges leases, so live workers keep their jobs. With 150 jobs queued and Postgres stopped for 12 or 30 s, frozen for 12 s, or restarted, no job was lost or ran twice. It is the single point of failure.
+- **Postgres is down or silent.** No call waits longer than 5 s: the API answers 503, scheduler and workers retry. Workers keep finished results until Postgres takes them, and after an outage the scheduler waits one lease before it judges leases, so live workers keep their jobs. Tests cut and freeze the connection to Postgres under real processes: no job is lost, and a finished job does not run again. It is the single point of failure.
 - **One tenant floods.** It fills only its own queue. The scheduler reads queue heads: a pass takes 2 to 3 ms with 10 or 100,000 jobs queued. Storage is unprotected: no queue limit.
 
 ## 4. At 5,000 tenants, 2,000 submissions/s, 500 workers

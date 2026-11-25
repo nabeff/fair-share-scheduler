@@ -1,27 +1,21 @@
-// The client of the scheduler's HTTP API. Everything the page knows about the
-// API is in this file: the paths, the shape of the answers, and what a failure
-// looks like. No component calls fetch itself.
+// The only file that talks to the API.
 
-/** What one tenant holds and waits for right now. */
 export interface TenantLoad {
   id: string;
   weight: number;
-  /** Jobs that run on a worker now. */
   running: number;
-  /** Jobs that wait: not started yet, or waiting for a retry. */
   waiting: number;
 }
 
-/** The answer of GET /pool. */
+/** GET /pool */
 export interface Pool {
-  /** Worker slots that are alive. */
   slots: number;
   tenants: TenantLoad[];
 }
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "dead";
 
-/** The answer of GET /jobs/:id. Times are ISO strings. */
+/** GET /jobs/:id. Times are ISO strings. */
 export interface Job {
   id: string;
   tenant_id: string;
@@ -29,18 +23,14 @@ export interface Job {
   attempts: number;
   max_attempts: number;
   created_at: string;
-  /** Start of the latest attempt. */
   started_at: string | null;
   finished_at: string | null;
-  /** After a failed attempt: the time of the next one. */
+  /** Next retry, after a failed attempt. */
   run_at: string;
   last_error: string | null;
 }
 
-/**
- * A call that did not work. `status` is the HTTP status, or 0 when no answer
- * came at all: the API is down, the network is gone, or the call took too long.
- */
+/** `status` is 0 when no answer came at all. */
 export class ApiError extends Error {
   readonly status: number;
 
@@ -51,12 +41,10 @@ export class ApiError extends Error {
   }
 }
 
-// The same address as the page. Vite (in development) and nginx (in Docker)
-// pass everything under /api on to the API, so the browser needs no CORS.
+// Proxied by Vite in dev and nginx in Docker, so no CORS.
 const BASE = "/api";
 
-// The API gives Postgres 5 seconds and then answers 503. We wait a little
-// longer than that, to get its answer and not our own timeout.
+// A bit longer than the API's own 5 s, so we get its 503 instead.
 const TIMEOUT_MS = 6000;
 
 async function call(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -71,12 +59,11 @@ async function call(path: string, init: RequestInit = {}): Promise<unknown> {
     response = await fetch(BASE + path, { ...init, signal });
     text = await response.text();
   } catch (err) {
-    // The caller stopped the call. That says nothing about the API.
     if (init.signal?.aborted) throw err;
     throw new ApiError(0, "The API does not answer.");
   }
 
-  // Not always JSON: a proxy in front of the API answers with an HTML page.
+  // nginx may answer with HTML.
   const answer = parseJson(text);
   if (!response.ok) {
     const words = isObject(answer) ? answer.error : undefined;
@@ -101,9 +88,7 @@ function parseJson(text: string): unknown {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-// An answer is checked once, here, where it enters the page. Past this point
-// the types can be trusted, and a wrong answer is an error like any other
-// instead of a crash somewhere in a component.
+// Validate answers here, so components can trust the types.
 const unexpected = () =>
   new ApiError(200, "The API sent an answer this page does not understand.");
 
@@ -129,14 +114,13 @@ const isJob = (value: unknown): value is Job =>
   typeof value.max_attempts === "number" &&
   typeof value.created_at === "string";
 
-/** Who holds the workers right now, and who waits. */
 export async function getPool(signal?: AbortSignal): Promise<Pool> {
   const answer = await call("/pool", { signal });
   if (!isPool(answer)) throw unexpected();
   return answer;
 }
 
-/** Stores one job and returns its id. */
+/** Returns the new job id. */
 export async function submitJob(
   tenantId: string,
   payload: Record<string, unknown>,
@@ -152,7 +136,7 @@ export async function submitJob(
   return answer.id;
 }
 
-/** Reads one job. Null when there is no job with this id. */
+/** Null if the job doesn't exist. */
 export async function getJob(
   id: string,
   signal?: AbortSignal,

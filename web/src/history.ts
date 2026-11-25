@@ -1,24 +1,17 @@
-// What the page remembers about the pool: one sample a second, for the last
-// minute. Plain functions on plain data, so the rules can be tested without a
-// browser. usePool.ts feeds them, the chart and the table read the result.
+// The last minute of pool samples. Plain functions, easy to test.
 
 import type { Pool } from "./api.ts";
 
-/** One answer of GET /pool, and when it was asked for (ms since 1970). */
+/** A GET /pool answer and when it was asked for. */
 export interface Sample {
   at: number;
   pool: Pool;
 }
 
 export interface History {
-  /** Oldest first. None is older than the window. */
+  /** Oldest first. */
   samples: readonly Sample[];
-  /**
-   * Tenant id to color number. Up to eight tenants each get one at once, in
-   * the order of the list. With more, colors go to tenants in the order they
-   * first had work. It only grows: a tenant never changes color while the
-   * page is open.
-   */
+  /** Tenant id to color index. A tenant never changes color. */
   colors: ReadonlyMap<string, number>;
 }
 
@@ -26,19 +19,13 @@ export const emptyHistory: History = { samples: [], colors: new Map() };
 
 export const WINDOW_SECONDS = 60;
 
-/**
- * Tenants with a color of their own. Eight colors can be told apart, also
- * by people who do not see all colors. A ninth would look like one of them,
- * so the ninth tenant and all after it share one grey part named OTHER.
- */
+/** Only 8 colors are distinct enough. The 9th tenant on shares grey. */
 export const OWN_COLORS = 8;
 export const OTHER = "other";
 
-/** Whole seconds between a sample and the newest one. */
 const secondsAgo = (newest: Sample, sample: Sample) =>
   Math.round((newest.at - sample.at) / 1000);
 
-/** The history with one more sample. */
 export function addSample(history: History, sample: Sample): History {
   const samples = [...history.samples, sample].filter(
     (earlier) => secondsAgo(sample, earlier) < WINDOW_SECONDS,
@@ -54,31 +41,26 @@ export function addSample(history: History, sample: Sample): History {
   return { samples, colors };
 }
 
-/** One piece of a stacked column: the workers one tenant held. */
 export interface Part {
-  /** A tenant id, or OTHER. */
   key: string;
-  /** 0 to 7 for a color of its own, 8 for the shared grey. */
+  /** 0 to 7, or 8 for grey. */
   color: number;
   workers: number;
 }
 
-/** One second of the chart. */
 export interface Column {
-  /** Seconds before the newest sample. 0 is now. */
+  /** 0 is now. */
   ago: number;
-  /** Null when no answer arrived in that second: the column stays empty. */
+  /** Null when no answer came that second. */
   state: {
-    /** Size of the pool. */
     slots: number;
-    /** Workers that ran a job. */
     busy: number;
-    /** In the order of the colors, so the stack never reshuffles. */
+    /** In color order, so stacks don't reshuffle. */
     parts: Part[];
   } | null;
 }
 
-/** The last minute as columns, from a minute ago (first) to now (last). */
+/** Oldest column first. */
 export function toColumns(history: History): Column[] {
   const columns: Column[] = [];
   for (let ago = WINDOW_SECONDS - 1; ago >= 0; ago--) {
@@ -87,8 +69,7 @@ export function toColumns(history: History): Column[] {
   const newest = history.samples.at(-1);
   if (!newest) return columns;
 
-  // Samples are placed by their time, not by their number. A second without
-  // an answer stays empty. Of two answers in one second, the later one wins.
+  // Place samples by time, so a missed second stays empty.
   for (const sample of history.samples) {
     const column = columns[WINDOW_SECONDS - 1 - secondsAgo(newest, sample)];
     if (column) column.state = stack(sample.pool, history.colors);
@@ -116,11 +97,7 @@ function stack(pool: Pool, colors: ReadonlyMap<string, number>) {
   return { slots: pool.slots, busy, parts };
 }
 
-/**
- * Each tenant's part of the worker time that was used in the window, from 0
- * to 1. This is the measure of fairness of the scheduler: while several
- * tenants have jobs waiting, the shares follow their weights.
- */
+/** Each tenant's share of the worker time in the window, 0 to 1. */
 export function workerTimeShares(
   samples: readonly Sample[],
 ): Map<string, number> {

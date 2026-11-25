@@ -1,7 +1,6 @@
 import type { Pool } from "./api.ts";
 import { count } from "./format.ts";
 
-/** The pool in four numbers. */
 export function PoolSummary({ pool }: { pool: Pool | null }) {
   const busy = pool?.tenants.reduce((sum, t) => sum + t.running, 0) ?? 0;
   const waiting = pool?.tenants.reduce((sum, t) => sum + t.waiting, 0) ?? 0;

@@ -1,25 +1,20 @@
 import { useEffect, useState } from "react";
 import { getJob, type Job } from "./api.ts";
 
-/** A question about one job. A new object for every time it is asked. */
+/** A new object on every lookup, so the same id can be asked again. */
 export interface Lookup {
   id: string;
 }
 
 export interface JobView {
-  /** The last answer. Null when the job does not exist, or nothing is known yet. */
   job: Job | null;
-  /** `lost` means the API did not answer the last time, and we keep trying. */
+  /** `lost`: the last call failed, still retrying. */
   state: "found" | "missing" | "lost";
 }
 
-/** Nothing changes any more once a job is in one of these. */
 const ENDED = ["succeeded", "dead"];
 
-/**
- * Reads one job, and reads it again every second until it has ended.
- * Returns null while the first answer is on its way.
- */
+/** Polls a job every second until it ends. */
 export function useJob(lookup: Lookup | null, everyMs = 1000): JobView | null {
   const [answer, setAnswer] = useState<{ to: Lookup; view: JobView } | null>(
     null,
@@ -60,6 +55,6 @@ export function useJob(lookup: Lookup | null, everyMs = 1000): JobView | null {
     };
   }, [lookup, everyMs]);
 
-  // An answer to an earlier question says nothing about this one.
+  // Ignore answers to an earlier lookup.
   return answer?.to === lookup ? answer.view : null;
 }

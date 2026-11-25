@@ -1,5 +1,3 @@
-// Numbers as the page prints them.
-
 /** 99280 as "99,280". */
 export const count = (value: number) => value.toLocaleString("en-US");
 

@@ -1,5 +1,4 @@
-/* One stylesheet for one page. The values that repeat are named here, and
-   dark mode only gives the same names other values. */
+/* Dark mode only overrides these variables. */
 :root {
   color-scheme: light dark;
 
@@ -42,7 +41,6 @@
     --band: rgb(255 255 255 / 8%);
     --focus: #3987e5;
 
-    /* Not the light colors turned up: steps chosen for a dark surface. */
     --tenant-1: #22d3ee;
     --tenant-2: #0e7490;
     --tenant-3: #7c3aed;
@@ -129,8 +127,6 @@ p {
     "chart tools"
     "table tools";
   grid-template-columns: minmax(0, 1fr) 340px;
-  /* When the tools are taller than the chart and the table together, the
-     room that is left goes below the table, not between the two. */
   grid-template-rows: auto 1fr;
   gap: 20px;
   align-items: start;
@@ -163,7 +159,7 @@ p {
   }
 }
 
-/* What shows the pool is old news while the API does not answer. */
+/* Dimmed while the API is down. */
 .page-stale .pool-data {
   opacity: 0.5;
 }
@@ -176,7 +172,7 @@ p {
   border-radius: 12px;
 }
 
-/* Is the page in touch with the API? Said in words, the dot only repeats it. */
+/* Live status */
 
 .connection {
   display: inline-flex;
@@ -230,7 +226,7 @@ p {
   line-height: 1.25;
 }
 
-/* The mark that stands for a tenant, beside its name */
+/* Tenant color mark */
 
 .key {
   display: inline-block;
@@ -248,13 +244,11 @@ p {
   border-radius: 0;
 }
 
-/* No color: the mark keeps its room, so the names stay in one line. */
 .key-none {
   background: none;
 }
 
-/* A forced color scheme, like Windows high contrast, repaints backgrounds.
-   The marks of the chart are backgrounds, so they keep their own colors. */
+/* Keep chart colors in Windows high contrast mode. */
 .key,
 .segment,
 .pool-line,
@@ -309,7 +303,6 @@ p {
   transform: translateY(-50%);
 }
 
-/* A column is as wide as the page allows and stacks from the baseline up. */
 .column {
   position: relative;
   display: flex;
@@ -318,7 +311,7 @@ p {
   min-width: 0;
 }
 
-/* The column that is read out stays as it is, and the others step back. */
+/* Fade the other columns while one is hovered. */
 .column-selected {
   background: var(--band);
 }
@@ -331,9 +324,7 @@ p {
   flex: none;
 }
 
-/* Two pixels of surface between two tenants. Space separates them, not a
-   border around each. It is painted inside the upper part, so the column
-   keeps its true height. */
+/* 2px gap between tenants, drawn inside so the height stays true. */
 .segment + .segment {
   box-shadow: inset 0 -2px 0 var(--surface);
 }
@@ -342,8 +333,7 @@ p {
   border-radius: 3px 3px 0 0;
 }
 
-/* The size of the pool in that second. Side by side these make one line,
-   with a step where a worker joined or left. */
+/* The pool size line, one piece per column. */
 .pool-line {
   position: absolute;
   right: -1px;
@@ -384,7 +374,6 @@ p {
   color: var(--ink-2);
 }
 
-/* The number first and strong: the reader knows the tenant, and wants the number. */
 .readout b {
   min-width: 2ch;
   margin-right: 6px;
@@ -411,7 +400,6 @@ p {
   font-size: 12px;
 }
 
-/* Each label under its place on the scale. The two at the ends stay inside. */
 .time-axis span {
   position: absolute;
   transform: translateX(-50%);
@@ -470,19 +458,18 @@ tbody tr:last-child > * {
   border-bottom: 0;
 }
 
-/* A tenant without a job steps back, so the ones with work stand out. */
+/* Tenants without jobs are dimmed. */
 tbody tr.idle > * {
   color: var(--ink-2);
 }
 
-/* The one line of a table that has nothing to list yet. */
 td.empty {
   padding-left: 0;
   color: var(--ink-2);
   text-align: left;
 }
 
-/* The two tools: submit jobs, and read the status of one */
+/* Submit and status cards */
 
 code {
   padding: 1px 5px;
@@ -508,7 +495,6 @@ code {
   grid-column: 1 / -1;
 }
 
-/* One field with its button beside it. */
 .fields-inline {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -518,7 +504,7 @@ code {
   gap: 8px;
 }
 
-/* Batches that are ready to send, under the form. */
+/* Example buttons */
 .examples {
   margin-top: 16px;
   padding-top: 14px;
@@ -557,8 +543,7 @@ input {
   width: 100%;
 }
 
-/* The tenant picker: a box like the inputs, with a small chevron drawn in
-   the second text color, and a list of its own under it. */
+/* Tenant picker */
 .picker {
   position: relative;
   display: grid;
@@ -625,7 +610,6 @@ input {
   background: var(--band);
 }
 
-/* The chosen tenant: bold, with a check mark drawn on the right. */
 .picker-option[aria-selected="true"] {
   font-weight: 600;
 }
@@ -659,7 +643,7 @@ button:disabled {
   cursor: default;
 }
 
-/* Room for one line, so the card does not jump when the first report comes. */
+/* Reserve a line so the card doesn't jump. */
 .report {
   min-height: 21px;
   margin-top: 14px;
@@ -683,7 +667,7 @@ button:disabled {
   margin-top: 10px;
 }
 
-/* A phone: less air around everything, and fewer labels under the chart. */
+/* Phone */
 @media (max-width: 520px) {
   .page {
     padding: 20px 14px 48px;

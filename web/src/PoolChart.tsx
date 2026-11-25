@@ -12,7 +12,7 @@ import { colorOf } from "./palette.ts";
 
 const share = (part: number, whole: number) => `${(part / whole) * 100}%`;
 
-/** Round steps (1, 2, 5, 10, ...) that draw at most five lines up to the top. */
+/** Round steps (1, 2, 5, 10 ...), at most five lines. */
 export function ticksUpTo(top: number): number[] {
   const step =
     [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].find(
@@ -23,21 +23,13 @@ export function ticksUpTo(top: number): number[] {
   return ticks;
 }
 
-/**
- * Who held the workers, second by second: one stacked column a second.
- *
- * The marks are plain boxes sized in percent, so the chart follows the width
- * of the page without measuring anything. Pointing at a column, or walking
- * with the arrow keys, reads the numbers of that second.
- */
+/** One stacked column per second, plain divs sized in percent. */
 export function PoolChart({ history }: { history: History }) {
-  // The column that is read out, in seconds ago. It follows the position, not
-  // the sample: "10 s ago" stays "10 s ago" while the samples move through.
+  // Hovered column, in seconds ago.
   const [selected, setSelected] = useState<number | null>(null);
 
   const columns = toColumns(history);
-  // The scale ends at the size of the pool. Right after a worker is stopped,
-  // more jobs can count as running than the pool has slots: then it ends there.
+  // Usually the pool size, unless more jobs run than slots (after a worker stops).
   const top = Math.max(
     1,
     ...columns.map(({ state }) =>
@@ -46,8 +38,6 @@ export function PoolChart({ history }: { history: History }) {
   );
   const selectedIndex = columns.findIndex(({ ago }) => ago === selected);
   const selectedColumn = columns[selectedIndex];
-  // What an empty plot says. Before the first sample nothing is known, not
-  // even the size of the pool, so the plot has no scale either.
   const waiting = history.samples.length === 0;
   const note = waiting
     ? "No samples yet."
@@ -57,7 +47,6 @@ export function PoolChart({ history }: { history: History }) {
 
   function point(event: PointerEvent) {
     const column = (event.target as Element).closest<HTMLElement>("[data-ago]");
-    // Between two columns there is a small gap. Keep the last column there.
     if (column) setSelected(Number(column.dataset.ago));
   }
 
@@ -67,8 +56,7 @@ export function PoolChart({ history }: { history: History }) {
     const jump = { Home: WINDOW_SECONDS - 1, End: 0 }[event.key];
     if (step === undefined && jump === undefined) return;
     event.preventDefault(); // do not scroll the page
-    // From the value of the moment, not the one this render saw: two key
-    // presses can arrive before the chart is drawn again.
+    // Two key presses can come before the next render.
     setSelected((current) => {
       const to = jump ?? (current ?? 0) + (step ?? 0);
       return Math.min(WINDOW_SECONDS - 1, Math.max(0, to));
@@ -92,8 +80,7 @@ export function PoolChart({ history }: { history: History }) {
           tabIndex={0}
           onPointerMove={point}
           onPointerDown={point}
-          // A finger "leaves" the moment it is lifted. The column it tapped
-          // stays read out until the chart loses the focus.
+          // On touch, keep the tapped column until blur.
           onPointerLeave={(event) => {
             if (event.pointerType !== "touch") setSelected(null);
           }}
@@ -139,10 +126,7 @@ export function PoolChart({ history }: { history: History }) {
   );
 }
 
-/**
- * Names the colors that are in the chart right now. A tenant keeps its color
- * for good, but it is only listed while one of the columns shows it.
- */
+/** Legend: only tenants visible in the chart. */
 function Legend(props: {
   colors: ReadonlyMap<string, number>;
   columns: Column[];
@@ -208,10 +192,8 @@ function StackedColumn(props: {
   );
 }
 
-/** The numbers of one second, beside its column. */
 function Readout({ column, index }: { column: Column; index: number }) {
   const { ago, state } = column;
-  // On the side of the column that has room.
   const middle = ((index + 0.5) / WINDOW_SECONDS) * 100;
   const place =
     middle < 50

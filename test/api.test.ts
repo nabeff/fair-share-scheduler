@@ -1,5 +1,4 @@
-// The HTTP API, as a real process on a real Postgres.
-// Needs the database from docker compose: docker compose up -d db
+// The API as a real process. Needs: docker compose up -d db
 
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
@@ -20,7 +19,7 @@ const skip = (await postgresIsUp())
   ? false
   : "Postgres is not reachable. Start it with: docker compose up -d db";
 
-// A database of its own: this file runs at the same time as the crash tests.
+// Own database, since this file runs in parallel with the crash tests.
 const DATABASE = "scheduler_test_api";
 
 describe("the API", { skip }, () => {
@@ -37,7 +36,6 @@ describe("the API", { skip }, () => {
       signal: AbortSignal.timeout(5000), // an answer that never comes fails the test
     });
 
-  /** Starts an API process on a free port and waits until it answers. */
   async function startApi(settings: Record<string, string>) {
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
@@ -101,7 +99,7 @@ describe("the API", { skip }, () => {
     assert.equal((await get("/jobs/not-a-number")).status, 404);
   });
 
-  // 503 tells the client to retry. A request that can never work must not get it.
+  // 503 means retry, so a request that can never work must not get it.
   test("a request that can never work gets 400, not 503", async () => {
     const missingPayload = await post(JSON.stringify({ tenant_id: "cafe" }));
     assert.equal(missingPayload.status, 400);
@@ -116,9 +114,8 @@ describe("the API", { skip }, () => {
     assert.equal(nulCharacter.status, 400);
   });
 
-  // Not asked for by the brief: the numbers behind the live page in web/.
+  // Used by the live page.
   test("the pool shows who holds the workers and who waits", async () => {
-    // A case of its own, with nothing left from the tests above.
     await db.query("TRUNCATE jobs");
     await db.query("DELETE FROM workers");
     await db.query(
@@ -153,8 +150,7 @@ describe("the API", { skip }, () => {
     });
   });
 
-  // Postgres takes the connection but never answers: a frozen server, or a
-  // network that swallows the packets. The client must not be left waiting.
+  // A frozen Postgres must not leave the client waiting.
   test("when Postgres stops answering, the API says 503 instead of waiting", async () => {
     const postgres = await databaseProxy(urlFor(DATABASE));
     const second = await startApi({
@@ -179,7 +175,6 @@ describe("the API", { skip }, () => {
   });
 });
 
-/** A port nobody uses: ask the system for one, then give it back. */
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, resolve));

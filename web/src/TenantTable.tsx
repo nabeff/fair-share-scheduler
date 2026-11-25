@@ -2,10 +2,7 @@ import { count, percent } from "./format.ts";
 import { workerTimeShares, type History } from "./history.ts";
 import { colorOf } from "./palette.ts";
 
-/**
- * Every tenant, with what it holds now. This is also the chart as numbers,
- * for whoever cannot or does not want to read colors.
- */
+/** Also the chart in numbers, for anyone who can't read the colors. */
 export function TenantTable({ history }: { history: History }) {
   const tenants = history.samples.at(-1)?.pool.tenants ?? [];
   const shares = workerTimeShares(history.samples);

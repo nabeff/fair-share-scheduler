@@ -16,13 +16,11 @@ const CONNECTION: Record<Connection, string> = {
 export function App() {
   const { history, connection } = usePool();
   const pool = history.samples.at(-1)?.pool ?? null;
-  // The job in the status panel. Both forms set it: a batch shows its first
-  // job, and the panel has a field for any other id.
+  // Set by a submit (its first job) or by the lookup field.
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const lookUp = (id: string) => setLookup({ id });
 
   return (
-    // Without answers the last picture stays, dimmed: it is old news.
     <main className={connection === "lost" ? "page page-stale" : "page"}>
       <header className="masthead">
         <div>

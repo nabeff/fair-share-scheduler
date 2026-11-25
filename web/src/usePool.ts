@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { getPool, type Pool } from "./api.ts";
 import { addSample, emptyHistory, type History } from "./history.ts";
 
-/** Before the first answer, while answers come, and while they do not. */
 export type Connection = "connecting" | "live" | "lost";
 
 export interface PoolView {
@@ -10,18 +9,12 @@ export interface PoolView {
   connection: Connection;
 }
 
-/** An answer that is this many seconds late counts as no answer. */
 const LATE_AFTER_BEATS = 2;
 
-/** A timer that fires up to this part of a beat early still counts for it. */
+/** Timers may fire slightly early, still count it for that beat. */
 const EARLY = 0.1;
 
-/**
- * Reads the pool once a second and keeps the last minute.
- *
- * Polling, not a push from the server: one small GET a second is enough for
- * a picture that changes once a second, and the API stays stateless.
- */
+/** Polls GET /pool every second. Simple, and the API stays stateless. */
 export function usePool(
   load: (signal: AbortSignal) => Promise<Pool> = getPool,
   everyMs = 1000,
@@ -38,9 +31,7 @@ export function usePool(
     let askedAt = 0;
 
     async function read() {
-      // A second that comes while the last call is still out is skipped, so
-      // slow answers never pile up. A call can hang for seconds before it
-      // fails, and the page must not say "live" all that time.
+      // Skip a beat while the last call is still out, so calls don't pile up.
       if (reading) {
         if (Date.now() - askedAt >= LATE_AFTER_BEATS * everyMs) {
           setView(({ history }) => ({ history, connection: "lost" }));
@@ -49,10 +40,7 @@ export function usePool(
       }
       reading = true;
       askedAt = Date.now();
-      // The sample is stamped with the time of its beat, not with the clock.
-      // No timer fires exactly on time, and in a tab in the background one can
-      // fire most of a second late. Placed by the clock, such a sample would
-      // land on the next second and leave a hole in its own.
+      // Stamp with the beat, not the clock: a late timer would leave a gap.
       const beat = Math.floor((askedAt - firstBeatAt) / everyMs + EARLY);
       const at = firstBeatAt + beat * everyMs;
       try {
@@ -64,7 +52,6 @@ export function usePool(
         }));
       } catch {
         if (stop.signal.aborted) return;
-        // Keep what we have. The page shows it dimmed and says why.
         setView(({ history }) => ({ history, connection: "lost" }));
       } finally {
         reading = false;
@@ -72,9 +59,7 @@ export function usePool(
     }
 
     void read();
-    // A fixed beat, not "a second after the last answer": a browser lets a
-    // tab in the background wake up once a second at most, and a wait that
-    // starts after each answer would then read every other second only.
+    // A fixed beat: background tabs only wake once a second.
     const beat = setInterval(read, everyMs);
     return () => {
       stop.abort();

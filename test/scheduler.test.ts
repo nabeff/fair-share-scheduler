@@ -1,5 +1,4 @@
-// The brief says the scheduler must not read the job duration from the
-// payload. The scheduling code does not mention the payload at all.
+// The brief: the scheduler must not read the job duration.
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -20,9 +19,7 @@ test("the scheduling code never touches the payload", async () => {
   }
 });
 
-// After a database outage every lease has run out, but no worker died. The
-// scheduler gives the workers one lease to show they are alive before it
-// takes any job back. Here that rule runs on a clock moved by hand.
+// leaseGrace() on a fake clock.
 describe("the wait before leases are judged", () => {
   const LEASE = 10_000;
   function setUp() {
@@ -51,11 +48,10 @@ describe("the wait before leases are judged", () => {
     at(61_000);
     grace.passFailed();
     assert.equal(grace.isOver(), false);
-    // The next pass waits 5 seconds for an answer, and gets it.
     at(67_000);
     grace.passWorked();
 
-    // One lease from that answer, not from the failure 6 seconds before it.
+    // One lease from the answer, not from the failure.
     at(76_999);
     assert.equal(grace.isOver(), false);
     at(77_000);

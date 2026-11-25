@@ -1,5 +1,3 @@
-// Unit tests for the "who runs next" logic. No database, no clock.
-
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -70,7 +68,7 @@ test("the tenant with the lowest usage gets the free worker", () => {
 });
 
 test("usage is divided by weight", () => {
-  // Same worker seconds used, but "bank" pays for four times the share.
+  // Same seconds used, but bank's weight is 4.
   const result = dispatched(
     [
       tenant("school", {
@@ -92,7 +90,7 @@ test("usage is divided by weight", () => {
 });
 
 test("jobs that are still running count as usage", () => {
-  // "long" has finished nothing yet, but its job has held a worker for 100 s.
+  // Nothing finished yet, but a job has run for 100 s.
   const result = dispatched(
     [
       tenant("long", { vtime: 0, running: 1, runningSeconds: 100, waiting: 5 }),

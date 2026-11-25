@@ -1,5 +1,4 @@
-// How a worker takes jobs, on a real Postgres.
-// Needs the database from docker compose: docker compose up -d db
+// Needs: docker compose up -d db
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,10 +9,8 @@ const skip = (await postgresIsUp())
   ? false
   : "Postgres is not reachable. Start it with: docker compose up -d db";
 
-// A worker asks for as many jobs as it has free slots. Postgres chooses how
-// to run a statement from its statistics of the table. With the statistics
-// of a table that held one row, it once ran the part that picks the jobs
-// again for every row, and a claim for 5 took all 20.
+// With stats saying the table has one row, the old query ran the pick once
+// per row, and a claim for 5 took all 20.
 test("a claim never takes more jobs than it asked for", { skip }, async () => {
   const db = await freshDatabase("scheduler_test_claim");
   try {

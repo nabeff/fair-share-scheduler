@@ -1,5 +1,4 @@
-// Fairness over time, checked on a simulated pool of 20 workers.
-// These tests run the real decide() function against a model of the workers.
+// Fairness over time on a simulated pool of 20 workers.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -37,7 +36,6 @@ test("flood: small tenants start within a second of submitting", () => {
     ],
   });
 
-  // Alone for the first minute, the big tenant used every worker.
   assert.equal(result.supermarket.peakRunning, SLOTS);
 
   smallBatches.forEach((count, i) => {
@@ -77,8 +75,7 @@ test("a tenant with only 5 minute jobs cannot take every worker", () => {
     ],
   });
 
-  // "first" was alone at the start and filled the pool. Once "second" has
-  // work, neither may hold more than its capped share.
+  // Once "second" has work, neither may exceed its cap.
   assert.equal(result.first.peakRunning, SLOTS);
   assert.ok(result.second.peakRunning <= cap(SLOTS, 1, 2));
   assertClose(result.first.share, 0.5, 0.1);

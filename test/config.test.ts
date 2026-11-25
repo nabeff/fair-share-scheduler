@@ -1,5 +1,4 @@
-// Settings come from the environment. The config is read when a process
-// starts, so each case starts a small process of its own.
+// Config is read at startup, so each case runs its own process.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -23,8 +22,6 @@ test("a setting that is not a number stops the process and names the variable", 
   assert.match(result.stderr, /LEASE_MS must be a whole number/);
 });
 
-// Every setting is a count or a number of milliseconds, and the SQL
-// statements take them as integers.
 test("a number with a fraction is refused as well", () => {
   const result = startWith({ LEASE_MS: "2500.5" });
   assert.notEqual(result.status, 0);

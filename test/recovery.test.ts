@@ -1,5 +1,4 @@
-// Crash recovery and retries, on a real Postgres with real processes.
-// Needs the database from docker compose: docker compose up -d db
+// Crash recovery and retries with real processes. Needs: docker compose up -d db
 
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -30,7 +29,6 @@ const skip = (await postgresIsUp())
   ? false
   : "Postgres is not reachable. Start it with: docker compose up -d db";
 
-/** Worker time a tenant has used so far, per unit of weight. */
 async function vtimeOf(db: pg.Pool, tenantId: string): Promise<number> {
   const { rows } = await db.query("SELECT vtime FROM tenants WHERE id = $1", [
     tenantId,
@@ -45,7 +43,7 @@ describe("a lease that expired", { skip }, () => {
   });
   after(() => db.end());
 
-  // A job as a dead worker would leave it: running, nobody extending it.
+  // A job left behind by a dead worker.
   async function abandonedJob(attempts: number, leaseEndsInSeconds: number) {
     const { rows } = await db.query(
       `INSERT INTO jobs (tenant_id, payload, status, attempts, worker_id,
@@ -74,7 +72,6 @@ describe("a lease that expired", { skip }, () => {
     await abandonedJob(1, -1);
     await pass(db);
 
-    // 30 seconds on a tenant of weight 1.
     const charged = (await vtimeOf(db, "cafe")) - usedBefore;
     assert.ok(charged >= 30 && charged < 31, `${charged}`);
   });
@@ -94,7 +91,6 @@ describe("a lease that expired", { skip }, () => {
     assert.ok(job.finished_at);
   });
 
-  // What the scheduler does for one lease after a failed pass: see its main().
   test("a pass that is told not to judge leases leaves the job alone", async () => {
     const id = await abandonedJob(1, -1);
     await pass(db, false);
@@ -105,9 +101,7 @@ describe("a lease that expired", { skip }, () => {
   });
 });
 
-// During a pass the scheduler holds a lock. If it freezes in the middle of
-// one (a stalled machine, a network that swallows packets), the lock must
-// not stay with it, or no scheduler could decide anything any more.
+// A scheduler frozen mid-pass must not keep the lock forever.
 describe("a scheduler that froze in the middle of a pass", { skip }, () => {
   let db: pg.Pool;
   before(async () => {
@@ -115,8 +109,6 @@ describe("a scheduler that froze in the middle of a pass", { skip }, () => {
   });
   after(() => db.end());
 
-  // What a frozen scheduler looks like to Postgres: a transaction that took
-  // the lock, and then says nothing more.
   const takeTheLockAndGoSilent = `
     const { connect } = await import(process.argv[1]);
     const { SCHEDULER_LOCK } = await import(process.argv[2]);
@@ -171,7 +163,6 @@ describe("with a real scheduler and real workers", { skip }, () => {
     db = await freshDatabase();
     scheduler = start("scheduler");
   });
-  // Every test starts its own workers and leaves none behind.
   afterEach(() => {
     for (const worker of workers.splice(0)) worker.kill("SIGKILL");
   });
@@ -194,8 +185,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.match(done.last_error, /lease expired/);
   });
 
-  // What Docker does after a crash: the container restarts and the worker
-  // comes back under the same id. It must not keep its old job alive.
+  // Docker restarts it under the same id. It must not keep its old job alive.
   test("the job is also retried when the worker restarts under the same id", async () => {
     const first = startWorker({ WORKER_ID: "worker-a" });
     const id = await submit(db, "cafe", { sleep_ms: 1500 });
@@ -210,8 +200,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.match(done.last_error, /lease expired/);
   });
 
-  // A deploy or a scale down, not a crash: the worker is asked to stop while
-  // its job still has a long way to go.
+  // A deploy, not a crash.
   test("a worker that is stopped hands its job back, no attempt is used", async () => {
     const first = startWorker({ SHUTDOWN_GRACE_MS: "100" });
     const id = await submit(db, "kiosk", { sleep_ms: 1500 });
@@ -225,7 +214,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     });
     assert.equal(back.attempts, 0);
     assert.match(back.last_error, /handed back/);
-    // The time it held a worker is still charged to its tenant.
+    // The tenant still pays for the time used.
     const used = await vtimeOf(db, "kiosk");
     assert.ok(used > usedBefore, `${used} after, ${usedBefore} before`);
 
@@ -234,8 +223,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.equal(done.attempts, 1);
   });
 
-  // Postgres is away for 6 seconds while a job finishes, less than the lease
-  // of 10 seconds. The worker keeps the result until Postgres takes it.
+  // A 6 s outage, shorter than the lease: the result is saved afterwards.
   test("a finished job is not run again because Postgres was away", async () => {
     const postgres = await databaseProxy();
     try {
@@ -254,8 +242,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     }
   });
 
-  // The other side: the outage outlasts the lease, the job has gone to
-  // another worker, and the first worker comes back with its old result.
+  // The outage outlasts the lease and the job moved to another worker.
   test("a result that arrives after the lease was lost is refused", async () => {
     const postgres = await databaseProxy();
     try {
@@ -277,9 +264,8 @@ describe("with a real scheduler and real workers", { skip }, () => {
     }
   });
 
-  // Not an outage: Postgres answers, and the answer is no. Here the backoff
-  // does not fit in an integer, so the result of a failed attempt can never
-  // be saved. The job is not lost: its lease runs out and it is retried.
+  // Postgres rejects the result (backoff too big for an int). The lease
+  // runs out and the job is retried.
   test("a result that Postgres refuses is given up, not offered for ever", async () => {
     const worker = startWorker({ BACKOFF_MS: "3000000000" });
     const id = await submit(db, "florist", { fail_attempts: 1 });
@@ -288,8 +274,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.equal(done.attempts, 2);
     assert.match(done.last_error, /lease expired/);
 
-    // The worker is not still holding the result it could not save: asked
-    // to stop, it has nothing to wait for.
+    // It gave up on that result, so it stops right away.
     worker.kill("SIGTERM");
     await waitFor(
       "the worker to stop",
@@ -318,7 +303,6 @@ describe("with a real scheduler and real workers", { skip }, () => {
   });
 });
 
-// Here the scheduler loses Postgres too, not only one worker.
 describe("when Postgres is away for everyone", { skip }, () => {
   let db: pg.Pool;
   let postgres: Awaited<ReturnType<typeof databaseProxy>>;
@@ -342,9 +326,7 @@ describe("when Postgres is away for everyone", { skip }, () => {
   });
   after(() => db.end());
 
-  // Postgres takes the connections but stops answering, then is reachable
-  // again. The old connections never wake up: a process that waited on them
-  // without a time limit would be stuck for good.
+  // Without timeouts, a process would hang on the frozen connections forever.
   test("scheduler and worker carry on once it answers again", async () => {
     startSchedulerAndWorker({ DB_TIMEOUT_MS: "300" });
     const first = await submit(db, "cafe", {});
@@ -358,8 +340,7 @@ describe("when Postgres is away for everyone", { skip }, () => {
     await waitFor("a job after", jobIs(db, second, "succeeded"));
   });
 
-  // The outage lasts longer than the lease. Every lease has run out, but
-  // nobody died: the worker is alive and still holds the result.
+  // Every lease expired during the outage, but the worker is alive.
   test("an outage is not taken for a crash of every worker", async () => {
     startSchedulerAndWorker({ LEASE_MS: "4000" });
     const id = await submit(db, "cafe", { sleep_ms: 300 });

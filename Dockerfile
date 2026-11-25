@@ -1,5 +1,4 @@
-# One image for every process: API, scheduler, worker, migration, tests and load test.
-# Node 24 runs TypeScript files directly, so there is no build step.
+# One image for every service. Node 24 runs TypeScript directly, no build step.
 FROM node:24-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./

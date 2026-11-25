@@ -4,12 +4,10 @@ import { duration } from "./format.ts";
 import { useJob, type Lookup } from "./useJob.ts";
 
 interface Props {
-  /** The job to show. The page sets it, from this form or after a batch. */
   lookup: Lookup | null;
   onLookUp: (id: string) => void;
 }
 
-/** Reads the status of one job, by its id, and follows it until it has ended. */
 export function JobStatus({ lookup, onLookUp }: Props) {
   const view = useJob(lookup);
 
@@ -68,7 +66,6 @@ function Facts({ job }: { job: Job }) {
     time === null
       ? "not yet"
       : `${duration(Date.parse(time) - Date.parse(job.created_at))} after it was submitted`;
-  // started_at is the start of the latest attempt, so say which one it was.
   const attempt = job.attempts > 1 ? ` (attempt ${job.attempts})` : "";
 
   return (

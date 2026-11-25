@@ -1,63 +1,52 @@
-// The fair share algorithm. Pure functions only: no database, no clock.
-// The scheduler loads a snapshot, calls decide() and applies the result.
+// Fair share logic. Pure functions, no database.
 //
-// Fairness is measured in worker time, not in job count, because nobody
-// knows how long a job takes before it runs. Each tenant has a virtual time:
-// the worker seconds it has used, divided by its weight. Serving the lowest
-// virtual time first gives every tenant with waiting work a share of worker
-// time in proportion to its weight.
+// Virtual time (vtime) = worker seconds used / weight. The tenant with the
+// lowest vtime goes next, so worker time follows the weights.
 
 /** What the scheduler knows about one tenant at the start of a pass. */
 export interface TenantSnapshot {
   id: string;
   weight: number;
-  /** Stored virtual time. Covers finished attempts only. */
+  /** Finished attempts only, running jobs are added on top. */
   vtime: number;
-  /** True if the tenant already had work at the previous pass. */
+  /** Had work at the previous pass. */
   active: boolean;
-  /** Jobs that hold a worker slot: picked by us, or running. */
+  /** Ready or running. */
   running: number;
-  /** Seconds the running jobs have run so far, summed over the jobs. */
   runningSeconds: number;
-  /** Jobs waiting to be picked. */
   waiting: number;
 }
 
 export interface Decision {
-  /** How many waiting jobs to hand to workers now, per tenant. */
+  /** Jobs to start now, per tenant. */
   dispatch: Map<string, number>;
-  /** Tenants that just got work, with the virtual time they start from. */
+  /** Tenants that just got work, with their starting vtime. */
   activate: Map<string, number>;
-  /** Tenants that ran out of work. */
   deactivate: string[];
 }
 
 /**
- * A tenant may hold its fair share of the pool, rounded up, plus this many
- * workers. The slack lets virtual time repay small debts: rounding, and the
- * idle gap between two short jobs. With 0, a tenant with 50 ms jobs got
- * 12.4% of worker time instead of its 14.3% in simulation.
+ * Extra workers allowed above the fair share. Without it, tenants with very
+ * short jobs fell below their share (12.4% instead of 14.3% in simulation).
  */
 export const CAP_SLACK = 1;
 
-/** Most workers a tenant may hold while other tenants are waiting. */
+/** Max workers a tenant may hold while others are waiting. */
 export function cap(pool: number, weight: number, totalWeight: number): number {
   return Math.ceil((pool * weight) / totalWeight) + CAP_SLACK;
 }
 
-/** One scheduler pass: who becomes active, and who gets the free workers. */
+/** One pass: which tenants start or stop, and how many jobs each may start. */
 export function decide(
   tenants: TenantSnapshot[],
   totalSlots: number,
 ): Decision {
   const hasWork = (t: TenantSnapshot) => t.waiting > 0 || t.running > 0;
-  // Usage so far, per unit of weight. Running jobs count, otherwise a
-  // 5 minute job would look free until it ends.
+  // Count running jobs too, or a 5 minute job looks free until it ends.
   const usage = (t: TenantSnapshot, vtime = t.vtime) =>
     vtime + t.runningSeconds / t.weight;
 
-  // 1. A tenant that was idle earns no credit for the time it was away.
-  //    It restarts from the lowest usage among tenants that kept working.
+  // A tenant coming back from idle gets no credit for the time away.
   const stillActive = tenants.filter((t) => t.active && hasWork(t));
   const floor =
     stillActive.length > 0
@@ -72,7 +61,6 @@ export function decide(
     .filter((t) => t.active && !hasWork(t))
     .map((t) => t.id);
 
-  // 2. Hand out the free worker slots.
   const contenders: Contender[] = tenants.map((t) => ({
     id: t.id,
     weight: t.weight,
@@ -93,6 +81,7 @@ interface Contender {
   usage: number;
 }
 
+// Give free workers out one at a time, each to the next tenant in line.
 function dispatchFreeSlots(
   tenants: Contender[],
   totalSlots: number,
@@ -104,15 +93,13 @@ function dispatchFreeSlots(
     const waiting = tenants.filter((t) => t.waiting > 0);
     if (waiting.length === 0) break;
 
-    // Workers held by tenants with nothing waiting are not up for sharing.
-    // The rest is the pool that the waiting tenants split by weight.
+    // Only waiting tenants split the pool. Others keep what they hold.
     const settled = tenants.filter((t) => t.waiting === 0);
     const pool = totalSlots - sum(settled, (t) => t.running);
     const totalWeight = sum(waiting, (t) => t.weight);
 
     const next = pickNext(waiting, pool, totalWeight);
-    // Cannot be undefined: the caps add up to more than the pool, so while
-    // a worker is free at least one waiting tenant is under its cap.
+    // Can't happen: the caps add up to more than the pool.
     if (!next) break;
 
     next.running += 1;
@@ -123,7 +110,7 @@ function dispatchFreeSlots(
   return dispatch;
 }
 
-/** Who gets the next free worker: lowest usage among tenants under cap. */
+/** Lowest usage among tenants under their cap. */
 function pickNext(
   waiting: Contender[],
   pool: number,
@@ -137,10 +124,10 @@ function pickNext(
   return best;
 }
 
+// True if a should get the next worker before b.
 function comesBefore(a: Contender, b: Contender): boolean {
   if (a.usage !== b.usage) return a.usage < b.usage;
-  // Same usage, typical for tenants that arrived together: the one with
-  // fewer running jobs per unit of weight goes first, so they take turns.
+  // Tie: fewer running jobs per weight goes first, so they take turns.
   const loadA = a.running / a.weight;
   const loadB = b.running / b.weight;
   if (loadA !== loadB) return loadA < loadB;

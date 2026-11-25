@@ -1,15 +1,12 @@
-// A small model of the worker pool. It drives decide() over simulated time,
-// so fairness can be checked in seconds, without Postgres or Docker.
-// Job lengths are known to the model only. decide() never sees them, just
-// like the real scheduler never reads the payload.
+// Simulated pool that drives the real decide() over simulated time.
+// Only the model knows job lengths, decide() never sees them.
 
 import { decide, type TenantSnapshot } from "../src/fairshare.ts";
 
 export interface Batch {
-  /** Second at which the tenant submits the batch. */
+  /** Submit time, in seconds. */
   at: number;
   count: number;
-  /** Length of one job in seconds. */
   seconds: (random: () => number) => number;
 }
 
@@ -22,21 +19,19 @@ export interface SimTenant {
 export interface SimOptions {
   slots: number;
   tenants: SimTenant[];
-  /** Simulated seconds. */
   duration: number;
-  /** Worker time is only counted from this second on. Default 0. */
+  /** Measure from this second. Default 0. */
   measureFrom?: number;
-  /** Worker time is only counted up to this second. Default: the end. */
+  /** Measure until this second. Default: the end. */
   measureTo?: number;
   seed?: number;
 }
 
 export interface TenantResult {
-  /** Worker seconds used inside the measured window. */
   workerSeconds: number;
-  /** Its part of all worker seconds used inside the window, 0 to 1. */
+  /** 0 to 1. */
   share: number;
-  /** For every started job: seconds between submit and start. */
+  /** Submit to start, per job, in seconds. */
   waits: number[];
   completed: number;
   peakRunning: number;
@@ -75,7 +70,6 @@ export function simulate(options: SimOptions): Record<string, TenantResult> {
     const now = step * TICK;
 
     for (const t of tenants) {
-      // Submissions that are due.
       t.notSubmitted = t.notSubmitted.filter((batch) => {
         if (batch.at > now) return true;
         for (let i = 0; i < batch.count; i++) {
@@ -86,7 +80,7 @@ export function simulate(options: SimOptions): Record<string, TenantResult> {
         }
         return false;
       });
-      // Jobs that finished: the tenant pays for the worker time they used.
+      // Finished jobs: charge the tenant.
       t.running = t.running.filter((job) => {
         if (job.end > now) return true;
         t.vtime += (job.end - job.start) / t.weight;
@@ -141,12 +135,11 @@ export function simulate(options: SimOptions): Record<string, TenantResult> {
   return Object.fromEntries(tenants.map((t) => [t.id, t.result]));
 }
 
-/** Job length picked evenly between two bounds, in seconds. */
 export function between(min: number, max: number) {
   return (random: () => number) => min + random() * (max - min);
 }
 
-/** Repeatable random numbers, so a failing run can be replayed. */
+/** Seeded, so a failing run can be replayed. */
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {

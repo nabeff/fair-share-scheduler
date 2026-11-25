@@ -116,6 +116,7 @@ The tests of the scheduler:
 - `simulation.test.ts`: the same function driving a simulated pool. A flood, weights 1, 2, 4, 5 minute jobs, 60 tenants.
 - `recovery.test.ts`: a real scheduler and real workers on a real Postgres. A worker is killed with SIGKILL in the middle of a job and the job is retried. A worker that is stopped hands its job back: no attempt is used, and the tenant is still charged for the worker time. Postgres is cut off from a worker for 6 seconds and the finished job is not run again. A result that arrives after the lease was lost is refused. A result that Postgres refuses is given up, not offered for ever. A job that fails once succeeds on the retry. A job that always fails is `dead` after 3 attempts. A scheduler that freezes in the middle of a pass loses its lock, and the next pass works. Postgres stops answering for a second, and scheduler and worker carry on afterwards. Postgres is away for longer than the lease, and the scheduler does not take the job of a live worker back.
 - `db.test.ts`: a connection that Postgres closes between two statements does not stop the process, every connection carries the time limits, and an error tells whether Postgres was away or refused the statement.
+- `claim.test.ts`: a worker that asks for 5 jobs gets 5, also when Postgres has the statistics of an almost empty table and could run the pick more than once.
 - `worker.test.ts`, `scheduler.test.ts` and `config.test.ts`: the retry backoff, a check that the scheduling code never mentions the payload, the wait before leases are judged after an outage, and a setting that is not a whole number stops the process at start.
 
 The tests of the page run without a browser and without the API (jsdom, and a stand-in for `fetch`): the client of the API, the history of the pool, the polling, the chart with pointer, touch and keyboard, the two forms, and the page as a whole.
@@ -138,18 +139,18 @@ The numbers below come from a real run on a laptop (Docker VM with 6 CPUs, pool 
 
 ### Scenario 1: one tenant floods
 
-`supermarket` submits 100,000 jobs of 50 to 500 ms through the API (12,885 jobs per second). Then four small tenants submit 5, 7, 8 and 10 jobs. At that moment 99,280 jobs of `supermarket` are still waiting.
+`supermarket` submits 100,000 jobs of 50 to 500 ms through the API (8,588 jobs per second). Then four small tenants submit 5, 7, 8 and 10 jobs. At that moment 99,004 jobs of `supermarket` are still waiting.
 
 ```
  tenant  jobs  wait p50  wait p95  wait max  all jobs done after
 -------  ----  --------  --------  --------  -------------------
-   cafe     5    191 ms    265 ms    273 ms               587 ms
-  kiosk     7    207 ms    361 ms    425 ms               701 ms
- barber     8    282 ms    316 ms    316 ms               623 ms
-florist    10    370 ms    467 ms    467 ms               727 ms
+ barber     8    273 ms    361 ms    363 ms               704 ms
+   cafe     5    336 ms    358 ms    358 ms               720 ms
+florist    10    422 ms    515 ms    542 ms               736 ms
+  kiosk     7    152 ms    378 ms    387 ms               622 ms
 ```
 
-Every job of a small tenant started within 467 ms. In one first in, first out queue they would have waited about 23 minutes.
+Every job of a small tenant started within 542 ms. In one first in, first out queue they would have waited about 23 minutes.
 
 The wait is not 0 because there is no preemption: when the small tenants arrive every worker is busy with a job of `supermarket`, and they wait for those jobs to finish.
 
@@ -158,9 +159,9 @@ Who held the workers, per 5 second bucket (time 0 is when the small tenants subm
 ```
 time  supermarket  cafe  kiosk  barber  florist                          pool of 20 workers
 ----  -----------  ----  -----  ------  -------  ------------------------------------------
--10s         18.4   0.0    0.0     0.0      0.0  |#####################################...|
+-10s         18.2   0.0    0.0     0.0      0.0  |####################################....|
  -5s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
- +0s         16.8   0.3    0.4     0.3      0.4  |##################################kb....|
+ +0s         16.8   0.3    0.3     0.3      0.5  |##################################kbf...|
  +5s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
 +10s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
 (average workers held per tenant. # = supermarket, c = cafe, k = kiosk, b = barber, f = florist, . = idle)
@@ -171,18 +172,18 @@ The same, zoomed in on the arrival (250 ms buckets):
 ```
   time  supermarket  cafe  kiosk  barber  florist                          pool of 20 workers
 ------  -----------  ----  -----  ------  -------  ------------------------------------------
--0.50s         19.0   0.0    0.0     0.0      0.0  |######################################..|
--0.25s         17.6   0.0    0.0     0.0      0.0  |###################################.....|
-+0.00s         11.8   1.4    1.6     1.9      2.1  |########################cckkkkbbbffff...|
-+0.25s          3.4   3.7    4.3     3.8      3.0  |#######ccccccckkkkkkkkkbbbbbbbffffff....|
-+0.50s         11.6   0.7    1.3     1.0      3.2  |#######################cckkbbfffffff....|
-+0.75s         18.1   0.0    0.0     0.0      0.0  |####################################....|
-+1.00s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
-+1.25s         18.2   0.0    0.0     0.0      0.0  |####################################....|
-+1.50s         18.2   0.0    0.0     0.0      0.0  |####################################....|
-+1.75s         17.9   0.0    0.0     0.0      0.0  |####################################....|
+-0.50s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
+-0.25s         18.5   0.0    0.0     0.0      0.0  |#####################################...|
++0.00s         12.6   1.2    1.7     0.8      2.4  |#########################ccckkkbfffff...|
++0.25s          3.6   3.1    3.8     3.9      3.6  |#######cccccckkkkkkkkbbbbbbbbfffffff....|
++0.50s          8.3   2.5    1.1     2.0      4.5  |#################ccccckkbbbbfffffffff...|
++0.75s         19.0   0.0    0.0     0.0      0.0  |######################################..|
++1.00s         18.1   0.0    0.0     0.0      0.0  |####################################....|
++1.25s         18.6   0.0    0.0     0.0      0.0  |#####################################...|
++1.50s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
++1.75s         18.5   0.0    0.0     0.0      0.0  |#####################################...|
 +2.00s         18.3   0.0    0.0     0.0      0.0  |#####################################...|
-+2.25s         18.4   0.0    0.0     0.0      0.0  |#####################################...|
++2.25s         18.0   0.0    0.0     0.0      0.0  |####################################....|
 (average workers held per tenant. # = supermarket, c = cafe, k = kiosk, b = barber, f = florist, . = idle)
 ```
 
@@ -201,9 +202,9 @@ About 1.7 of the 20 workers show as idle (the dots). Each job start waits for th
 ```
 tenant  weight  jobs done  worker seconds  share  target
 ------  ------  ---------  --------------  -----  ------
-school       1       1601           161.4  14.3%   14.3%
- hotel       2        637           323.1  28.5%   28.6%
-  bank       4        326           647.9  57.2%   57.1%
+school       1       1580           161.9  14.3%   14.3%
+ hotel       2        654           324.6  28.6%   28.6%
+  bank       4        318           648.6  57.1%   57.1%
 ```
 
 Worker time follows the weights to within 0.1 point, although `school` ran about 5 times more jobs than `bank`. The split holds in every 5 second bucket:
@@ -211,24 +212,24 @@ Worker time follows the weights to within 0.1 point, although `school` ran about
 ```
 time  school  hotel  bank                          pool of 20 workers
 ----  ------  -----  ----  ------------------------------------------
- +0s     2.7    5.4  10.7  |11111222222222224444444444444444444444..|
- +5s     2.6    5.3  10.9  |11111222222222224444444444444444444444..|
-+10s     2.7    5.4  10.8  |11111222222222224444444444444444444444..|
-+15s     2.7    5.4  10.7  |11111222222222224444444444444444444444..|
-+20s     2.6    5.4  10.9  |11111222222222224444444444444444444444..|
-+25s     2.7    5.4  10.7  |11111222222222224444444444444444444444..|
-+30s     2.7    5.3  10.9  |11111222222222224444444444444444444444..|
-+35s     2.7    5.5  10.6  |11111222222222224444444444444444444444..|
-+40s     2.7    5.4  10.8  |11111222222222224444444444444444444444..|
-+45s     2.7    5.4  10.8  |11111222222222224444444444444444444444..|
-+50s     2.7    5.2  11.0  |11111222222222224444444444444444444444..|
+ +0s     2.6    5.5  10.8  |11111222222222224444444444444444444444..|
+ +5s     2.8    5.3  10.7  |11111122222222224444444444444444444444..|
++10s     2.7    5.3  11.0  |11111222222222224444444444444444444444..|
++15s     2.7    5.5  10.7  |11111222222222224444444444444444444444..|
++20s     2.7    5.3  10.9  |11111222222222224444444444444444444444..|
++25s     2.7    5.4  10.9  |11111222222222224444444444444444444444..|
++30s     2.8    5.4  10.8  |11111122222222224444444444444444444444..|
++35s     2.6    5.4  11.0  |11111222222222224444444444444444444444..|
++40s     2.8    5.4  10.8  |11111122222222224444444444444444444444..|
++45s     2.8    5.5  10.6  |11111122222222224444444444444444444444..|
++50s     2.7    5.4  10.8  |11111222222222224444444444444444444444..|
 +55s     2.7    5.5  10.7  |11111222222222224444444444444444444444..|
 (average workers held per tenant. 1 = school, 2 = hotel, 4 = bank, . = idle)
 ```
 
 ### The scheduler keeps up
 
-With 100,000 jobs queued a scheduler pass takes 2 to 3 ms, the same as with an empty queue. The scheduler prints it: `docker compose logs scheduler`.
+With 100,000 jobs queued a scheduler pass takes about 3 ms, the same as with an empty queue. The scheduler prints it: `docker compose logs scheduler`.
 
 ## See a crash recovery
 

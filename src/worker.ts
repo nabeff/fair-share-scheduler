@@ -1,16 +1,11 @@
-// A worker process. It claims jobs the scheduler marked "ready", runs them
-// and reports the result. It takes no scheduling decision.
-//
-// Reliability rests on a lease. A claimed job belongs to this worker only
-// while its heartbeats keep pushing lease_expires_at forward. If the process
-// dies, the lease runs out and the scheduler hands the job to another worker.
+// Worker: claims "ready" jobs, runs them, reports the result.
+// A claimed job is ours only while our heartbeats renew its lease.
 
 import { hostname } from "node:os";
 import { config } from "./config.ts";
 import { connect, refusedByPostgres, sleep } from "./db.ts";
 
-// In a container the hostname and the pid (always 1) survive a restart, so a
-// worker that crashed comes back under the same id. See heartbeat().
+// In Docker this id survives a restart. See heartbeat().
 const workerId = process.env.WORKER_ID ?? `${hostname()}-${process.pid}`;
 const db = connect(4);
 
@@ -21,25 +16,15 @@ interface ClaimedJob {
   max_attempts: number;
 }
 
-// The jobs this process is working on right now. Each one takes a slot, and
-// every heartbeat extends its lease.
 const running = new Set<ClaimedJob>();
-// Finished jobs whose result Postgres has not taken yet.
+// Results not saved yet.
 let unsavedResults = 0;
 let stopping = false;
 
-// FOR UPDATE SKIP LOCKED lets many workers claim at the same time without
-// waiting on each other, and never hands the same job to two of them.
-//
-// The attempt is counted here, when the job is taken, not when it ends. If
-// the answer to this statement is lost (a timeout), the jobs are ours in
-// Postgres but we do not know them. Nobody extends their lease, so the
-// scheduler takes them back after one lease, with the attempt used.
-//
-// The jobs are picked first, once, and then updated. MATERIALIZED says so
-// to Postgres. With the pick written inside "WHERE id IN (...)", Postgres
-// may run it again for every row, each time skipping the rows it has just
-// taken, and the claim takes more jobs than the worker has slots.
+// SKIP LOCKED: workers claim in parallel, never the same job twice.
+// The attempt counts at claim time, so a lost reply still uses it.
+// MATERIALIZED: pick once. Inside "WHERE id IN (...)" Postgres could run
+// the pick per row and claim more jobs than we have slots.
 export const CLAIM_SQL = `
   WITH picked AS MATERIALIZED (
     SELECT id FROM jobs
@@ -58,15 +43,14 @@ export const CLAIM_SQL = `
   WHERE jobs.id = picked.id
   RETURNING jobs.id, jobs.payload, jobs.attempts, jobs.max_attempts`;
 
+// Take up to `limit` ready jobs.
 async function claim(limit: number): Promise<ClaimedJob[]> {
   const { rows } = await db.query(CLAIM_SQL, [workerId, config.leaseMs, limit]);
   return rows;
 }
 
-// Tell the scheduler we are alive, and keep the lease on the jobs we are
-// working on. Only those are extended, not every job stored under our id. A
-// worker that restarts under the same id must not keep the jobs of its
-// previous life alive: they expire and are retried.
+// Renew only the jobs we really run. After a restart under the same id,
+// jobs from before the crash must expire and be retried.
 async function heartbeat(): Promise<void> {
   const slots = stopping ? 0 : config.workerSlots;
   await db.query(
@@ -81,9 +65,8 @@ async function heartbeat(): Promise<void> {
   );
 }
 
-// The "work". This is the only code in the system that reads the payload.
-//   sleep_ms       how long the job takes
-//   fail_attempts  fail on purpose on the first N attempts (to test retries)
+// The fake work, and the only place that reads the payload.
+// fail_attempts makes the first N attempts fail, to test retries.
 async function handle(job: ClaimedJob): Promise<void> {
   await sleep(Number(job.payload.sleep_ms ?? 0));
   if (job.attempts <= Number(job.payload.fail_attempts ?? 0)) {
@@ -91,7 +74,7 @@ async function handle(job: ClaimedJob): Promise<void> {
   }
 }
 
-/** What happens to a job after an attempt, and when a retry may start. */
+/** After an attempt: succeeded, failed (retry later) or dead. */
 export function outcomeOf(
   attempts: number,
   maxAttempts: number,
@@ -99,16 +82,15 @@ export function outcomeOf(
 ): { status: "succeeded" | "failed" | "dead"; retryInMs: number } {
   if (error === null) return { status: "succeeded", retryInMs: 0 };
   if (attempts >= maxAttempts) return { status: "dead", retryInMs: 0 };
-  // Exponential backoff: 2 s after the first failure, then 4 s, 8 s ...
+  // Backoff: 2 s, 4 s, 8 s ...
   return {
     status: "failed",
     retryInMs: config.backoffMs * 2 ** (attempts - 1),
   };
 }
 
-// Record how the attempt ended and charge the tenant for the worker time it
-// used, in one statement. The WHERE clause is a fence: if our lease expired
-// and the job went to another worker, nothing matches and nothing changes.
+// Save the result and charge the tenant in one statement. The WHERE is a
+// fence: if we lost the lease, nothing matches.
 async function report(job: ClaimedJob, error: string | null): Promise<void> {
   const { status, retryInMs } = outcomeOf(
     job.attempts,
@@ -141,15 +123,8 @@ async function report(job: ClaimedJob, error: string | null): Promise<void> {
   }
 }
 
-// Postgres can be away for a while. A finished job is not thrown away for
-// that: the worker offers the result again every second until Postgres
-// answers. Every answer ends the loop:
-//   - the result is saved,
-//   - the fence in report() says the job is no longer ours,
-//   - Postgres refuses the statement itself, and would refuse it every time.
-// The lease is not extended while we wait. A result that is not saved in time,
-// or never, is not a lost job: the scheduler takes the job back and it runs
-// again (delivery is at least once).
+// If Postgres is down, keep retrying the result every second. If the lease
+// runs out meanwhile, the job just runs again (at least once).
 async function reportUntilAnswered(
   job: ClaimedJob,
   error: string | null,
@@ -174,10 +149,8 @@ async function reportUntilAnswered(
   }
 }
 
-// A worker that is asked to stop gives back the jobs it cannot finish in
-// time. They return to the front of their queue at once and the attempt is
-// not counted: being stopped is not a failure of the job. The tenant is still
-// charged for the worker time it used.
+// On shutdown, give unfinished jobs back right away. Being stopped isn't
+// the job's fault, so the attempt is refunded. The tenant still pays.
 async function handBack(jobs: ClaimedJob[]): Promise<void> {
   const { rows } = await db.query(
     `WITH returned AS (
@@ -204,12 +177,12 @@ async function handBack(jobs: ClaimedJob[]): Promise<void> {
      SELECT count(*)::int AS jobs FROM returned`,
     [workerId, jobs.map((job) => job.id)],
   );
-  // Fewer than we held, if the scheduler took some back in the meantime.
   console.log(
     `worker ${workerId}: handed back ${rows[0].jobs} unfinished jobs`,
   );
 }
 
+// Run one job, then save its result.
 async function run(job: ClaimedJob): Promise<void> {
   let error: string | null = null;
   try {
@@ -217,13 +190,13 @@ async function run(job: ClaimedJob): Promise<void> {
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
-  // The work is over and the slot is free. What is left is to save the result.
   running.delete(job);
   unsavedResults += 1;
   await reportUntilAnswered(job, error);
   unsavedResults -= 1;
 }
 
+// Claim jobs while there are free slots, until stopped.
 async function main(): Promise<void> {
   await heartbeat();
   const beat = setInterval(() => {
@@ -247,14 +220,11 @@ async function main(): Promise<void> {
         await sleep(1000);
       }
     }
-    // Nothing was ready, or every slot is busy: look again shortly.
     if (claimed === 0) await sleep(config.pollMs);
   }
 
-  // Shutdown. Take no new jobs, tell the scheduler our slots are gone, and
-  // give running jobs a moment to finish and to save their result. Whatever
-  // is still running after that goes back to the queue. If even that fails,
-  // the lease recovers the jobs, like after a crash.
+  // Shutdown: report 0 slots, let running jobs finish for a moment, then
+  // hand back the rest. If that fails too, the leases cover it.
   await heartbeat().catch(() => {});
   const deadline = Date.now() + config.shutdownGraceMs;
   const busy = () => running.size > 0 || unsavedResults > 0;

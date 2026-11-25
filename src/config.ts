@@ -1,11 +1,8 @@
-// Every setting comes from the environment, so one image can run as API,
-// scheduler or worker.
+// All settings come from env vars, so one image runs every service.
 
 import { fileURLToPath } from "node:url";
 
-// A setting that is not a whole number stops the process at start and names
-// the variable. Without this check "abc" would run as NaN, and 2500.5 would
-// fail later, in every SQL statement that takes the setting as an integer.
+// Fail at startup on a bad value, instead of running with NaN.
 const number = (name: string, fallback: number): number => {
   const raw = process.env[name];
   const value = raw === undefined || raw === "" ? fallback : Number(raw);
@@ -22,10 +19,9 @@ export const config = {
     process.env.DATABASE_URL ??
     "postgres://postgres:postgres@localhost:54329/scheduler",
 
-  // No call to Postgres waits longer than this. See src/db.ts.
+  // Timeout for every Postgres call.
   dbTimeoutMs: number("DB_TIMEOUT_MS", 5000),
 
-  // Tenants and weights are seeded from this file on every start.
   tenantsFile:
     process.env.TENANTS_FILE ??
     fileURLToPath(new URL("../tenants.json", import.meta.url)),
@@ -43,12 +39,10 @@ export const config = {
   heartbeatMs: number("HEARTBEAT_MS", 2000),
   shutdownGraceMs: number("SHUTDOWN_GRACE_MS", 8000),
 
-  // A job goes back to the queue when its worker is silent for this long.
-  // Five missed heartbeats with the defaults.
+  // Silent this long = worker is dead (5 missed heartbeats).
   leaseMs: number("LEASE_MS", 10_000),
 
-  // Retries: a job is started at most this many times, then it is dead.
   maxAttempts: number("MAX_ATTEMPTS", 3),
-  // Wait before a retry: 2 s after the first failure, then 4 s, 8 s ...
+  // Retry backoff: 2 s, 4 s, 8 s ...
   backoffMs: number("BACKOFF_MS", 2000),
 };

@@ -1,4 +1,3 @@
-# Settings shared by every process built from this repo.
 x-app: &app
   build: .
   environment:
@@ -14,16 +13,12 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: scheduler
-    # Published on an unusual host port so it never clashes with a Postgres
-    # already running on the machine. Only tests run from the host need it,
-    # so it is reachable from this machine only.
+    # Odd port to avoid a local Postgres. Localhost only, for tests.
     ports:
       - "127.0.0.1:${DB_PORT:-54329}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Checked over TCP on purpose. While the image sets up a new volume, a
-    # temporary server answers on the unix socket only, and the migration
-    # must not start before the real server is up.
+    # TCP, not the socket: on first start a temporary server answers the socket.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d scheduler"]
       interval: 2s
@@ -31,14 +26,13 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # Creates the tables and seeds tenants.json, then exits. Everything else waits for it.
+  # Creates the tables, loads tenants.json, exits.
   migrate:
     build: .
     command: ["node", "src/migrate.ts"]
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/scheduler
-      # A schema change on a large table can take longer than the 5 seconds
-      # that a call to Postgres gets everywhere else.
+      # Schema changes may need more than the usual 5 s.
       DB_TIMEOUT_MS: "600000"
     depends_on:
       db:
@@ -50,21 +44,19 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
 
-  # Decides which tenant runs next. A second replica would act as a standby.
+  # A second replica would be a standby.
   scheduler:
     <<: *app
     command: ["node", "src/scheduler.ts"]
 
-  # Several separate worker processes. Each one runs up to WORKER_SLOTS jobs at once.
+  # 4 processes x WORKER_SLOTS jobs each.
   worker:
     <<: *app
     command: ["node", "src/worker.ts"]
     deploy:
       replicas: 4
 
-  # The live page: http://localhost:8090
-  # Not asked for by the brief. It is one more client of the API, and nothing
-  # else depends on it.
+  # Live page, http://localhost:8090. Optional, just another API client.
   web:
     build: ./web
     ports:
@@ -72,7 +64,7 @@ services:
     depends_on: [api]
     restart: unless-stopped
 
-  # All tests, in a database of their own:  docker compose run --rm test
+  # docker compose run --rm test
   test:
     <<: *app
     command: ["npm", "test"]
@@ -80,26 +72,25 @@ services:
     pull_policy: build # always run the current code
     restart: "no"
 
-  # The tests of the page:  docker compose run --rm web-test
+  # docker compose run --rm web-test
   web-test:
     build:
       context: ./web
-      target: source # the stage with Node and the source, see web/Dockerfile
+      target: source
     command: ["npm", "test"]
     profiles: ["tools"]
     pull_policy: build # always run the current code
     restart: "no"
 
-  # The load test. It empties the job table, then prints its report and
-  # writes it to ./results:  docker compose run --rm loadtest
-  # One scenario only:       docker compose run --rm loadtest flood
+  # docker compose run --rm loadtest [flood|weights]
+  # Empties the job table, writes the report to ./results.
   loadtest:
     <<: *app
     entrypoint: ["node", "scripts/loadtest.ts"]
     profiles: ["tools"]
     pull_policy: build # always run the current code
     restart: "no"
-    user: root # so it can write into the mounted ./results on any host
+    user: root # to write into ./results
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/scheduler
       API_URL: http://api:8080

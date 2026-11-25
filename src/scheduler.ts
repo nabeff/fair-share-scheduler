@@ -1,42 +1,24 @@
-// The scheduler. It runs one short pass every few milliseconds:
-//
-//   1. take back the jobs whose worker went silent (crash recovery)
-//   2. count the slots of the workers that are alive
-//   3. load one row per tenant: weight, usage, running and waiting jobs
-//   4. let decide() choose who gets the free workers (src/fairshare.ts)
-//   5. mark that many of their oldest waiting jobs "ready" for the workers
-//
-// It keeps no job and no tenant in memory between two passes. Everything it
-// knows about them comes from Postgres, so it can crash and restart at any
-// point without losing anything. It only looks at job status and timestamps,
-// never at the content of a job, so it cannot know how long a job will take.
+// The scheduler. Each pass: take back jobs of dead workers, count free
+// slots, let decide() pick tenants, mark their oldest jobs "ready".
+// All state lives in Postgres, so it can restart at any time.
 
 import type { PoolClient } from "pg";
 import { config } from "./config.ts";
 import { connect, sleep, type Db } from "./db.ts";
 import { decide, type Decision, type TenantSnapshot } from "./fairshare.ts";
 
-// Any number works, two scheduler instances only have to agree on it.
 export const SCHEDULER_LOCK = 7_316_001;
 
-// Every query of a pass is written to read a few rows through an index.
-// Postgres picks its plan from table statistics, and a queue changes too
-// fast for them: it goes from empty to 100,000 rows and back between two
-// ANALYZE runs. With wrong statistics it sometimes chose to read the whole
-// backlog, and a pass got slower as the queue grew. Inside the scheduler's
-// transaction only index scans are allowed, so the cost of a pass does not
-// depend on the statistics. JIT compilation is off because it would add
-// about 20 ms to a query that takes less than 1 ms.
+// The queue size changes faster than Postgres statistics, and bad stats
+// once made it scan the whole backlog. Force index scans so a pass stays
+// fast. JIT would add ~20 ms to sub-millisecond queries.
 const PLAN_SETTINGS = [
   "SET LOCAL enable_seqscan = off",
   "SET LOCAL enable_bitmapscan = off",
   "SET LOCAL jit = off",
 ].join("; ");
 
-/**
- * One scheduler pass. Returns the snapshot it decided on, or null if skipped.
- * With judgeLeases false, step 1 is left out: see leaseGrace() for when.
- */
+/** Returns null when another scheduler holds the lock. */
 export async function pass(
   db: Db,
   judgeLeases = true,
@@ -46,8 +28,7 @@ export async function pass(
   try {
     await tx.query(`BEGIN; ${PLAN_SETTINGS}`);
 
-    // Only one scheduler decides at a time. A second instance finds the lock
-    // taken and skips its pass, which makes it a hot standby.
+    // One scheduler at a time. A second one just skips (hot standby).
     const lock = await tx.query(
       "SELECT pg_try_advisory_xact_lock($1) AS held",
       [SCHEDULER_LOCK],
@@ -69,9 +50,8 @@ export async function pass(
     failed = true;
     throw err;
   } finally {
-    // After a failure the connection is closed instead of reused: it may be
-    // broken, or still waiting for an answer that never comes. Closing it
-    // also rolls the transaction back and frees the lock.
+    // On failure, drop the connection instead of reusing it. This also
+    // rolls back and frees the lock.
     tx.release(failed);
   }
 }
@@ -82,11 +62,9 @@ export interface PassResult {
   decision: Decision;
 }
 
-// Crash recovery. A running job whose lease ran out has lost its worker: the
-// process died, hung, or was cut off from Postgres. The job goes back to the
-// queue and keeps its place at the front. If it has used all its attempts it
-// is buried instead, so a job that keeps killing its workers cannot loop
-// forever. The tenant is charged for the time the job held a worker slot.
+// Crash recovery: a running job with an expired lease lost its worker.
+// It goes back to the queue, or becomes dead after its last attempt.
+// The tenant still pays for the time the job held the slot.
 async function reclaimExpiredLeases(tx: PoolClient): Promise<void> {
   await tx.query(
     `WITH expired AS (
@@ -112,8 +90,7 @@ async function reclaimExpiredLeases(tx: PoolClient): Promise<void> {
   );
 }
 
-// Slots of the workers that sent a heartbeat recently. A worker that stays
-// silent for a whole lease is considered gone.
+// Workers silent for a whole lease are considered gone.
 async function liveSlots(tx: PoolClient): Promise<number> {
   const { rows } = await tx.query(
     `SELECT coalesce(sum(slots), 0)::int AS slots
@@ -124,8 +101,7 @@ async function liveSlots(tx: PoolClient): Promise<number> {
   return rows[0].slots;
 }
 
-// One row per tenant. Every number comes from the head of a partial index,
-// so the query costs the same with 10 waiting jobs or with 100,000.
+// Reads only the head of an index, so 10 or 100,000 waiting jobs cost the same.
 async function loadTenants(
   tx: PoolClient,
   totalSlots: number,
@@ -136,7 +112,6 @@ async function loadTenants(
             coalesce(held.running_seconds, 0)::float8 AS "runningSeconds",
             head.waiting::int AS waiting
      FROM tenants t
-     -- Jobs that hold a worker slot, and for how long they have been running.
      LEFT JOIN (
        SELECT tenant_id,
               count(*) AS running,
@@ -146,10 +121,7 @@ async function loadTenants(
        WHERE status IN ('ready', 'running')
        GROUP BY tenant_id
      ) held ON held.tenant_id = t.id
-     -- Jobs waiting to be picked. We never dispatch more than the pool in
-     -- one pass, so counting stops there instead of walking the backlog.
-     -- The ORDER BY is the order of the jobs_waiting index: Postgres walks
-     -- the index from its start and stops at the LIMIT.
+     -- Count up to the pool size only, we never dispatch more per pass.
      CROSS JOIN LATERAL (
        SELECT count(*) AS waiting
        FROM (
@@ -166,6 +138,7 @@ async function loadTenants(
   return rows;
 }
 
+// Write the decision: tenant states, then mark the chosen jobs ready.
 async function apply(tx: PoolClient, decision: Decision): Promise<void> {
   for (const [tenantId, vtime] of decision.activate) {
     await tx.query(
@@ -180,9 +153,7 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
     ]);
   }
   for (const [tenantId, count] of decision.dispatch) {
-    // Oldest first within a tenant. A retried job keeps its creation time,
-    // so it stays in front of the jobs submitted after it. While it waits
-    // for its backoff ("failed", run_at in the future) it is skipped.
+    // Oldest first. A retried job keeps its place; run_at skips it during backoff.
     await tx.query(
       `UPDATE jobs SET status = 'ready', ready_at = now()
        WHERE id IN (
@@ -199,32 +170,22 @@ async function apply(tx: PoolClient, decision: Decision): Promise<void> {
 }
 
 /**
- * A database outage is not a crash of every worker. If the scheduler could
- * not reach Postgres, the workers could not either: their leases ran out,
- * but nobody died. So once Postgres answers again, no job is taken back for
- * one lease. A worker that is alive extends its leases and saves its results
- * in that time, and only the jobs of workers that are really gone are left.
- * A scheduler that starts waits the same way: it does not know what happened
- * before it started.
- *
- * The price: crash recovery waits too. A worker that really died is noticed
- * one lease later, and not at all while passes keep failing.
+ * After a database outage every lease looks expired, but the workers are
+ * fine. So wait one lease before taking jobs back, giving live workers time
+ * to renew. Same on startup. Cost: a real crash is noticed a lease later.
  */
 export function leaseGrace(leaseMs: number, now = () => performance.now()) {
   let endsAt = now() + leaseMs;
   return {
-    /** True when leases may be judged again. */
     isOver: () => now() >= endsAt,
-    /** Postgres did not answer: no end in sight until it does. */
     passFailed: () => void (endsAt = Infinity),
-    /** Postgres answered. After a failure, the lease of grace starts here. */
     passWorked: () => {
       if (endsAt === Infinity) endsAt = now() + leaseMs;
     },
   };
 }
 
-/** One line showing who holds the workers right now, for the logs. */
+/** Log line: who holds the workers right now. */
 function describe({ totalSlots, tenants }: PassResult): string {
   const busy = tenants
     .filter((t) => t.running > 0 || t.waiting > 0)
@@ -232,6 +193,7 @@ function describe({ totalSlots, tenants }: PassResult): string {
   return `slots=${totalSlots} running: ${busy.join(" ") || "nothing"}`;
 }
 
+// Run a pass every TICK_MS until stopped.
 async function main(): Promise<void> {
   const db = connect(2);
   let stopping = false;
@@ -251,8 +213,7 @@ async function main(): Promise<void> {
       grace.passWorked();
       passMs += performance.now() - startedAt;
       passes += 1;
-      // Every few seconds, when the picture changed: who holds the workers,
-      // and how long a pass takes on average.
+      // Log every few seconds, only if something changed.
       if (result && Date.now() - lastLog >= config.logEveryMs) {
         const picture = describe(result);
         if (picture !== lastPicture) {

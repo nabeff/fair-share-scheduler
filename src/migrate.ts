@@ -1,4 +1,4 @@
-// Creates the tables and seeds the tenants. Runs once before the other services start.
+// Creates the tables and loads tenants.json. Runs before the other services.
 
 import { readFile } from "node:fs/promises";
 import { config } from "./config.ts";
@@ -9,6 +9,7 @@ interface TenantSeed {
   weight: number;
 }
 
+// Returns the number of tenants loaded.
 export async function migrate(
   db: Db,
   tenantsFile = config.tenantsFile,
@@ -21,7 +22,7 @@ export async function migrate(
 
   const tenants: TenantSeed[] = JSON.parse(await readFile(tenantsFile, "utf8"));
   for (const tenant of tenants) {
-    // Changing a weight in the file and restarting is how a plan change is applied.
+    // To change a weight: edit tenants.json and restart.
     await db.query(
       `INSERT INTO tenants (id, weight) VALUES ($1, $2)
        ON CONFLICT (id) DO UPDATE SET weight = EXCLUDED.weight`,

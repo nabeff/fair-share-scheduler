@@ -1,12 +1,6 @@
-// Load test: shows with real numbers that the scheduler is fair.
-//
-//   node scripts/loadtest.ts flood     one tenant floods, four small ones arrive
-//   node scripts/loadtest.ts weights   three tenants with weights 1, 2 and 4
-//   node scripts/loadtest.ts           both
-//
-// Jobs are submitted through the HTTP API, like a client would. The results
-// are measured from the job timestamps in Postgres, then printed and written
-// to results/ as CSV and text.
+// Load test: node scripts/loadtest.ts [flood|weights]
+// Submits through the API like a real client, measures from the job
+// timestamps in Postgres, writes the report to results/.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { connect, sleep } from "../src/db.ts";
@@ -37,7 +31,7 @@ async function submit(tenant: string, sleepMs: number): Promise<void> {
   }
 }
 
-/** Submits `count` jobs for a tenant and returns the rate in jobs per second. */
+/** Returns the submit rate in jobs per second. */
 async function submitMany(
   tenant: string,
   count: number,
@@ -55,7 +49,7 @@ async function submitMany(
   return count / ((Date.now() - startedAt) / 1000);
 }
 
-/** The clock of the database, the one the job timestamps come from. */
+/** Database clock, the one job timestamps use. */
 async function dbNow(): Promise<Date> {
   return (await db.query("SELECT now() AS now")).rows[0].now;
 }
@@ -68,16 +62,13 @@ async function poolSize(): Promise<number> {
   return rows[0].slots;
 }
 
-/** Waits until the API answers and workers have registered. */
 async function waitUntilReady(): Promise<void> {
   const deadline = Date.now() + 60_000;
   for (;;) {
     try {
       const health = await fetch(`${API_URL}/health`);
       if (health.ok && (await poolSize()) > 0) return;
-    } catch {
-      // Not up yet.
-    }
+    } catch {}
     if (Date.now() > deadline) {
       throw new Error("the system is not up. Start it: docker compose up -d");
     }
@@ -85,7 +76,7 @@ async function waitUntilReady(): Promise<void> {
   }
 }
 
-/** Empties the queue and forgets past usage, so every run starts equal. */
+/** Every run starts from an empty queue and zero usage. */
 async function reset(): Promise<void> {
   await db.query("TRUNCATE jobs RESTART IDENTITY");
   await db.query("UPDATE tenants SET vtime = 0, active = false");
@@ -105,16 +96,12 @@ const addSeconds = (date: Date, s: number) =>
 // ------------------------------------------------------------ measurement
 
 interface Bucket {
-  /** Start of the bucket, in seconds relative to the reference time. */
+  /** Seconds from the reference time. */
   start: number;
-  /** Worker seconds used in the bucket, per tenant. */
   used: Map<string, number>;
 }
 
-/**
- * Who held the workers over time. Each job counts for the time it really
- * ran, split over the buckets it overlaps.
- */
+/** Worker seconds per tenant per bucket. A job is split over the buckets it overlaps. */
 async function workerTime(
   from: Date,
   to: Date,
@@ -164,10 +151,7 @@ function table(headers: string[], rows: (string | number)[][]): string {
   ].join("\n");
 }
 
-/**
- * One row per bucket: workers held by each tenant on average, and a bar of
- * the whole pool where every character is a slice of it ("." means idle).
- */
+/** One row per bucket, with a text bar of the pool ("." = idle). */
 function shareChart(
   buckets: Bucket[],
   bucketSeconds: number,
@@ -277,7 +261,7 @@ async function flood(): Promise<void> {
     ),
   );
 
-  // Wait for every small job to finish, then watch the pool go back to "supermarket".
+  // Wait until every small job is done.
   const smallIds = smallTenants.map((t) => t.id);
   for (;;) {
     const left = await db.query(
@@ -291,8 +275,7 @@ async function flood(): Promise<void> {
     }
     await sleep(100);
   }
-  // The chart covers whole buckets: up to three before the small tenants
-  // arrive, and at least three from their arrival on.
+  // Up to 3 buckets before they arrive, at least 3 after.
   const bucketsBefore = Math.min(
     3,
     Math.floor(seconds(floodStart, arrival) / BUCKET_SECONDS),
@@ -409,8 +392,7 @@ async function flood(): Promise<void> {
 // ----------------------------------------------------- scenario 2: weights
 
 async function weights(): Promise<void> {
-  // Very different job lengths on purpose: fairness is about worker time,
-  // so the shares must follow the weights whatever the jobs look like.
+  // Very different job lengths on purpose: fairness is about worker time.
   const tenants = [
     {
       id: "school",
