@@ -50,7 +50,7 @@ describe("a lease that expired", { skip }, () => {
     const { rows } = await db.query(
       `INSERT INTO jobs (tenant_id, payload, status, attempts, worker_id,
                          started_at, lease_expires_at)
-       VALUES ('small-1', '{}', 'running', $1, 'worker-that-died',
+       VALUES ('cafe', '{}', 'running', $1, 'worker-that-died',
                now() - interval '30 seconds',
                now() + $2::int * interval '1 second')
        RETURNING id`,
@@ -70,12 +70,12 @@ describe("a lease that expired", { skip }, () => {
   });
 
   test("the tenant is charged for the time the job held a worker", async () => {
-    const usedBefore = await vtimeOf(db, "small-1");
+    const usedBefore = await vtimeOf(db, "cafe");
     await abandonedJob(1, -1);
     await pass(db);
 
     // 30 seconds on a tenant of weight 1.
-    const charged = (await vtimeOf(db, "small-1")) - usedBefore;
+    const charged = (await vtimeOf(db, "cafe")) - usedBefore;
     assert.ok(charged >= 30 && charged < 31, `${charged}`);
   });
 
@@ -182,7 +182,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
 
   test("a job is retried when its worker is killed in the middle", async () => {
     const first = startWorker();
-    const id = await submit(db, "small-1", { sleep_ms: 1500 });
+    const id = await submit(db, "cafe", { sleep_ms: 1500 });
     const started = await waitFor("the job to start", jobIs(db, id, "running"));
 
     first.kill("SIGKILL"); // a crash: no cleanup, no goodbye
@@ -198,7 +198,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
   // comes back under the same id. It must not keep its old job alive.
   test("the job is also retried when the worker restarts under the same id", async () => {
     const first = startWorker({ WORKER_ID: "worker-a" });
-    const id = await submit(db, "small-1", { sleep_ms: 1500 });
+    const id = await submit(db, "cafe", { sleep_ms: 1500 });
     await waitFor("the job to start", jobIs(db, id, "running"));
 
     first.kill("SIGKILL");
@@ -214,9 +214,9 @@ describe("with a real scheduler and real workers", { skip }, () => {
   // its job still has a long way to go.
   test("a worker that is stopped hands its job back, no attempt is used", async () => {
     const first = startWorker({ SHUTDOWN_GRACE_MS: "100" });
-    const id = await submit(db, "small-2", { sleep_ms: 1500 });
+    const id = await submit(db, "kiosk", { sleep_ms: 1500 });
     await waitFor("the job to start", jobIs(db, id, "running"));
-    const usedBefore = await vtimeOf(db, "small-2");
+    const usedBefore = await vtimeOf(db, "kiosk");
 
     first.kill("SIGTERM");
     const back = await waitFor("the job to come back", async () => {
@@ -226,7 +226,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     assert.equal(back.attempts, 0);
     assert.match(back.last_error, /handed back/);
     // The time it held a worker is still charged to its tenant.
-    const used = await vtimeOf(db, "small-2");
+    const used = await vtimeOf(db, "kiosk");
     assert.ok(used > usedBefore, `${used} after, ${usedBefore} before`);
 
     startWorker();
@@ -240,7 +240,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     const postgres = await databaseProxy();
     try {
       startWorker({ DATABASE_URL: postgres.url, LEASE_MS: "10000" });
-      const id = await submit(db, "small-3", { sleep_ms: 300 });
+      const id = await submit(db, "barber", { sleep_ms: 300 });
       await waitFor("the job to start", jobIs(db, id, "running"));
 
       postgres.cut();
@@ -260,7 +260,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
     const postgres = await databaseProxy();
     try {
       startWorker({ DATABASE_URL: postgres.url, WORKER_ID: "cut-off" });
-      const id = await submit(db, "small-3", { sleep_ms: 300 });
+      const id = await submit(db, "barber", { sleep_ms: 300 });
       await waitFor("the job to start", jobIs(db, id, "running"));
 
       postgres.cut();
@@ -282,7 +282,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
   // be saved. The job is not lost: its lease runs out and it is retried.
   test("a result that Postgres refuses is given up, not offered for ever", async () => {
     const worker = startWorker({ BACKOFF_MS: "3000000000" });
-    const id = await submit(db, "small-4", { fail_attempts: 1 });
+    const id = await submit(db, "florist", { fail_attempts: 1 });
 
     const done = await waitFor("the retry", jobIs(db, id, "succeeded"));
     assert.equal(done.attempts, 2);
@@ -300,7 +300,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
 
   test("a job that fails once succeeds on the retry", async () => {
     startWorker();
-    const id = await submit(db, "small-1", { fail_attempts: 1 });
+    const id = await submit(db, "cafe", { fail_attempts: 1 });
 
     const done = await waitFor("the retry", jobIs(db, id, "succeeded"));
     assert.equal(done.attempts, 2);
@@ -309,7 +309,7 @@ describe("with a real scheduler and real workers", { skip }, () => {
 
   test("a job that always fails is dead after 3 attempts", async () => {
     startWorker();
-    const id = await submit(db, "small-1", { fail_attempts: 99 });
+    const id = await submit(db, "cafe", { fail_attempts: 99 });
 
     const dead = await waitFor("the job to die", jobIs(db, id, "dead"));
     assert.equal(dead.attempts, 3);
@@ -347,14 +347,14 @@ describe("when Postgres is away for everyone", { skip }, () => {
   // without a time limit would be stuck for good.
   test("scheduler and worker carry on once it answers again", async () => {
     startSchedulerAndWorker({ DB_TIMEOUT_MS: "300" });
-    const first = await submit(db, "small-1", {});
+    const first = await submit(db, "cafe", {});
     await waitFor("a job before", jobIs(db, first, "succeeded"));
 
     postgres.freeze();
     await sleep(1000);
     postgres.restore();
 
-    const second = await submit(db, "small-1", {});
+    const second = await submit(db, "cafe", {});
     await waitFor("a job after", jobIs(db, second, "succeeded"));
   });
 
@@ -362,7 +362,7 @@ describe("when Postgres is away for everyone", { skip }, () => {
   // nobody died: the worker is alive and still holds the result.
   test("an outage is not taken for a crash of every worker", async () => {
     startSchedulerAndWorker({ LEASE_MS: "4000" });
-    const id = await submit(db, "small-1", { sleep_ms: 300 });
+    const id = await submit(db, "cafe", { sleep_ms: 300 });
     await waitFor("the job to start", jobIs(db, id, "running"));
 
     postgres.cut();

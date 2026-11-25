@@ -62,9 +62,29 @@ services:
     deploy:
       replicas: 4
 
+  # The live page: http://localhost:8090
+  # Not asked for by the brief. It is one more client of the API, and nothing
+  # else depends on it.
+  web:
+    build: ./web
+    ports:
+      - "${WEB_PORT:-8090}:80"
+    depends_on: [api]
+    restart: unless-stopped
+
   # All tests, in a database of their own:  docker compose run --rm test
   test:
     <<: *app
+    command: ["npm", "test"]
+    profiles: ["tools"]
+    pull_policy: build # always run the current code
+    restart: "no"
+
+  # The tests of the page:  docker compose run --rm web-test
+  web-test:
+    build:
+      context: ./web
+      target: source # the stage with Node and the source, see web/Dockerfile
     command: ["npm", "test"]
     profiles: ["tools"]
     pull_policy: build # always run the current code

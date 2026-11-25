@@ -25,7 +25,7 @@ test("flood: small tenants start within a second of submitting", () => {
     duration: 75,
     tenants: [
       {
-        id: "big",
+        id: "supermarket",
         weight: 1,
         batches: [{ at: 0, count: 100_000, seconds: between(0.05, 0.5) }],
       },
@@ -38,7 +38,7 @@ test("flood: small tenants start within a second of submitting", () => {
   });
 
   // Alone for the first minute, the big tenant used every worker.
-  assert.equal(result.big.peakRunning, SLOTS);
+  assert.equal(result.supermarket.peakRunning, SLOTS);
 
   smallBatches.forEach((count, i) => {
     const waits = result[`small-${i + 1}`].waits;
@@ -52,17 +52,17 @@ test("weights 1, 2, 4: worker time follows the weights, not job length", () => {
     slots: SLOTS,
     duration: 300,
     tenants: [
-      backlogged("bronze", 1, between(0.05, 0.15)),
-      backlogged("silver", 2, between(0.2, 0.8)),
-      backlogged("gold", 4, between(1, 3)),
+      backlogged("school", 1, between(0.05, 0.15)),
+      backlogged("hotel", 2, between(0.2, 0.8)),
+      backlogged("bank", 4, between(1, 3)),
     ],
   });
 
-  assertClose(result.bronze.share, 1 / 7, 0.01);
-  assertClose(result.silver.share, 2 / 7, 0.01);
-  assertClose(result.gold.share, 4 / 7, 0.01);
-  // Fair in time is not fair in job count: bronze ran many more jobs.
-  assert.ok(result.bronze.completed > 4 * result.gold.completed);
+  assertClose(result["school"].share, 1 / 7, 0.01);
+  assertClose(result["hotel"].share, 2 / 7, 0.01);
+  assertClose(result["bank"].share, 4 / 7, 0.01);
+  // Fair in time is not fair in job count: school ran many more jobs.
+  assert.ok(result["school"].completed > 4 * result["bank"].completed);
 });
 
 test("a tenant with only 5 minute jobs cannot take every worker", () => {

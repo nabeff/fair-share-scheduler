@@ -74,6 +74,46 @@ app.get("/health", async () => {
   return { ok: true };
 });
 
+// Who holds the workers right now, and who waits. Read only. The brief does
+// not ask for it: it feeds the live page in web/, which reads it once a second.
+// It lists every tenant and counts every waiting job. That is right for the
+// handful of tenants in tenants.json and for one page. With 5,000 tenants it
+// would list only the tenants that have work, a page at a time.
+app.get("/pool", async () => {
+  // The pool, counted like the scheduler counts it: the slots of the workers
+  // that sent a heartbeat within one lease.
+  const workers = await db.query(
+    `SELECT coalesce(sum(slots), 0)::int AS slots
+     FROM workers
+     WHERE last_seen > now() - $1::int * interval '1 ms'`,
+    [config.leaseMs],
+  );
+  // Per tenant: the jobs that run on a worker now, and the jobs that wait
+  // (not started yet, or waiting for a retry).
+  const tenants = await db.query(
+    `SELECT t.id, t.weight,
+            coalesce(held.running, 0)::int AS running,
+            (coalesce(held.ready, 0) + coalesce(queued.waiting, 0))::int AS waiting
+     FROM tenants t
+     LEFT JOIN (
+       SELECT tenant_id,
+              count(*) FILTER (WHERE status = 'running') AS running,
+              count(*) FILTER (WHERE status = 'ready') AS ready
+       FROM jobs
+       WHERE status IN ('ready', 'running')
+       GROUP BY tenant_id
+     ) held ON held.tenant_id = t.id
+     LEFT JOIN (
+       SELECT tenant_id, count(*) AS waiting
+       FROM jobs
+       WHERE status IN ('pending', 'failed')
+       GROUP BY tenant_id
+     ) queued ON queued.tenant_id = t.id
+     ORDER BY t.id`,
+  );
+  return { slots: workers.rows[0].slots, tenants: tenants.rows };
+});
+
 // A mistake of the client (bad JSON, a missing field, a body that is too
 // large) keeps its 4xx status. Anything else means we could not store or read
 // the job: 503, so the client retries. We never answer 201 for a job that is

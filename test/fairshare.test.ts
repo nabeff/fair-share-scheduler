@@ -30,8 +30,8 @@ function dispatched(tenants: TenantSnapshot[], slots: number) {
 }
 
 test("a tenant alone uses every worker", () => {
-  const result = dispatched([tenant("big", { waiting: 100_000 })], 20);
-  assert.deepEqual(result, { big: 20 });
+  const result = dispatched([tenant("supermarket", { waiting: 100_000 })], 20);
+  assert.deepEqual(result, { supermarket: 20 });
 });
 
 test("equal weights split the workers evenly", () => {
@@ -45,13 +45,17 @@ test("equal weights split the workers evenly", () => {
 test("workers follow the weights 1, 2 and 4", () => {
   const result = dispatched(
     [
-      tenant("bronze", { weight: 1, waiting: 500 }),
-      tenant("silver", { weight: 2, waiting: 500 }),
-      tenant("gold", { weight: 4, waiting: 500 }),
+      tenant("school", { weight: 1, waiting: 500 }),
+      tenant("hotel", { weight: 2, waiting: 500 }),
+      tenant("bank", { weight: 4, waiting: 500 }),
     ],
     14,
   );
-  assert.deepEqual(result, { bronze: 2, silver: 4, gold: 8 });
+  assert.deepEqual(result, {
+    school: 2,
+    hotel: 4,
+    bank: 8,
+  });
 });
 
 test("the tenant with the lowest usage gets the free worker", () => {
@@ -66,15 +70,25 @@ test("the tenant with the lowest usage gets the free worker", () => {
 });
 
 test("usage is divided by weight", () => {
-  // Same worker seconds used, but "gold" paid for four times the share.
+  // Same worker seconds used, but "bank" pays for four times the share.
   const result = dispatched(
     [
-      tenant("bronze", { weight: 1, vtime: 40 / 1, running: 1, waiting: 5 }),
-      tenant("gold", { weight: 4, vtime: 40 / 4, running: 1, waiting: 5 }),
+      tenant("school", {
+        weight: 1,
+        vtime: 40 / 1,
+        running: 1,
+        waiting: 5,
+      }),
+      tenant("bank", {
+        weight: 4,
+        vtime: 40 / 4,
+        running: 1,
+        waiting: 5,
+      }),
     ],
     3,
   );
-  assert.deepEqual(result, { gold: 1 });
+  assert.deepEqual(result, { bank: 1 });
 });
 
 test("jobs that are still running count as usage", () => {
@@ -153,7 +167,7 @@ test("tenants that arrive together take turns", () => {
   // Three free workers, three tenants with the same usage: one each.
   const result = dispatched(
     [
-      tenant("big", { running: 17, waiting: 500, vtime: 900 }),
+      tenant("supermarket", { running: 17, waiting: 500, vtime: 900 }),
       tenant("s1", { waiting: 9, vtime: 100 }),
       tenant("s2", { waiting: 9, vtime: 100 }),
       tenant("s3", { waiting: 9, vtime: 100 }),

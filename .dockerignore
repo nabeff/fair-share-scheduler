@@ -2,3 +2,6 @@ node_modules
 .git
 results
 *.md
+docs
+# The live page has an image of its own, built from web/.
+web

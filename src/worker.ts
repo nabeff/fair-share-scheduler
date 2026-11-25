@@ -30,6 +30,11 @@ let stopping = false;
 
 // FOR UPDATE SKIP LOCKED lets many workers claim at the same time without
 // waiting on each other, and never hands the same job to two of them.
+//
+// The attempt is counted here, when the job is taken, not when it ends. If
+// the answer to this statement is lost (a timeout), the jobs are ours in
+// Postgres but we do not know them. Nobody extends their lease, so the
+// scheduler takes them back after one lease, with the attempt used.
 async function claim(limit: number): Promise<ClaimedJob[]> {
   const { rows } = await db.query(
     `UPDATE jobs

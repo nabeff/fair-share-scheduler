@@ -22,7 +22,7 @@ Postgres is the only storage and also the queue. An **API** stores jobs, one **s
 
 - **Not lost.** The API answers 201 only after the job is committed in Postgres. Every later step is one SQL transaction, and no process keeps a job only in memory.
 - **At least once.** A job runs again if its worker dies before saving the result, or if its lease expires while it still runs (long pause, network cut). Jobs must be idempotent. A late result from a worker that lost its lease is refused: the write checks worker and attempt number.
-- **Bounded retries.** 3 attempts with 2 s then 4 s of backoff, then the job is `dead` and kept with its last error. A crash counts as an attempt, so a job that kills its worker cannot loop.
+- **Bounded retries.** 3 attempts with 2 s then 4 s of backoff, then the job is `dead` and kept with its last error. An attempt counts from the moment a worker takes the job: a crash counts, and so does a claim whose answer is lost. A job that kills its worker cannot loop.
 - **Delay and order.** A job of a tenant below its share starts when a worker frees up, plus up to 45 ms of polling. After a worker crash its jobs restart within 10 s. Per tenant, oldest first.
 
 **Not guaranteed:** exactly once, for runs or for submissions (a retry after a 503 can create the job twice); a maximum wait; a limit on job duration (a hung job keeps its slot while its worker lives); order across tenants; memory of usage before an idle period.
@@ -30,7 +30,7 @@ Postgres is the only storage and also the queue. An **API** stores jobs, one **s
 ## 3. Failures
 
 - **A worker crashes or hangs.** Heartbeats stop, the lease expires after 10 s and the scheduler requeues its jobs at the front. Tested with a real kill. A worker that is stopped (deploy, scale down) gets 8 s to finish, then hands the rest back with no attempt used.
-- **The scheduler crashes.** It holds no job state. Running jobs finish, the API keeps accepting, nothing new starts until it returns. Two can run: an advisory lock picks one.
+- **The scheduler crashes.** It holds no job state. Running jobs finish, the API keeps accepting, nothing new starts until it returns. Two can run: an advisory lock picks one. One that freezes in the middle of a pass loses the lock after 5 s.
 - **The API crashes.** Submissions fail and clients retry. Queued and running jobs carry on.
 - **Postgres is down or silent.** No call waits longer than 5 s: the API answers 503, scheduler and workers retry. Workers keep finished results until Postgres takes them, and after an outage the scheduler waits one lease before it judges leases, so live workers keep their jobs. With 150 jobs queued and Postgres stopped for 12 or 30 s, frozen for 12 s, or restarted, no job was lost or ran twice. It is the single point of failure.
 - **One tenant floods.** It fills only its own queue. The scheduler reads queue heads: a pass takes 2 to 3 ms with 10 or 100,000 jobs queued. Storage is unprotected: no queue limit.
@@ -56,7 +56,8 @@ Submissions already fit: one API process stored 12,900 jobs/s on a laptop. To ch
 
 ## 6. Assumptions
 
-- Tenants and weights are configuration (`tenants.json`). An unknown tenant gets 404.
+- Tenants and weights are set in `tenants.json`. An unknown tenant gets 404.
 - A "share of the workers" is a share of worker time. Any worker can run any job.
-- Every timestamp comes from the Postgres clock, so clock drift between machines does not matter.
+- Every timestamp is the Postgres clock, so drift between machines does not matter.
 - No authentication, one region, one Postgres. Everything used is on the allowed list.
+- No front end is asked for. `web/` is an extra: one more client of the API.

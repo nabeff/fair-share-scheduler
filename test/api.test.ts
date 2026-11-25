@@ -65,7 +65,7 @@ describe("the API", { skip }, () => {
 
   test("a submitted job is stored and can be read back", async () => {
     const response = await post(
-      JSON.stringify({ tenant_id: "small-1", payload: { sleep_ms: 100 } }),
+      JSON.stringify({ tenant_id: "cafe", payload: { sleep_ms: 100 } }),
     );
     assert.equal(response.status, 201);
     const created = await response.json();
@@ -73,13 +73,13 @@ describe("the API", { skip }, () => {
 
     const job = await (await get(`/jobs/${created.id}`)).json();
     assert.equal(job.id, created.id);
-    assert.equal(job.tenant_id, "small-1");
+    assert.equal(job.tenant_id, "cafe");
     assert.equal(job.status, "pending");
     assert.equal(job.attempts, 0);
   });
 
   test("a job picked by the scheduler reads as pending until a worker starts it", async () => {
-    const id = await submit(db, "small-1", {});
+    const id = await submit(db, "cafe", {});
     await db.query("UPDATE jobs SET status = 'ready' WHERE id = $1", [id]);
 
     const job = await (await get(`/jobs/${id}`)).json();
@@ -103,7 +103,7 @@ describe("the API", { skip }, () => {
 
   // 503 tells the client to retry. A request that can never work must not get it.
   test("a request that can never work gets 400, not 503", async () => {
-    const missingPayload = await post(JSON.stringify({ tenant_id: "small-1" }));
+    const missingPayload = await post(JSON.stringify({ tenant_id: "cafe" }));
     assert.equal(missingPayload.status, 400);
 
     const notJson = await post("{not json");
@@ -111,9 +111,46 @@ describe("the API", { skip }, () => {
 
     // Valid JSON that Postgres cannot store in a jsonb column.
     const nulCharacter = await post(
-      JSON.stringify({ tenant_id: "small-1", payload: { text: "\u0000" } }),
+      JSON.stringify({ tenant_id: "cafe", payload: { text: "\u0000" } }),
     );
     assert.equal(nulCharacter.status, 400);
+  });
+
+  // Not asked for by the brief: the numbers behind the live page in web/.
+  test("the pool shows who holds the workers and who waits", async () => {
+    // A case of its own, with nothing left from the tests above.
+    await db.query("TRUNCATE jobs");
+    await db.query("DELETE FROM workers");
+    await db.query(
+      `INSERT INTO workers (id, slots, last_seen) VALUES
+         ('alive-1', 5, now()), ('alive-2', 5, now()),
+         ('silent', 5, now() - interval '1 hour')`,
+    );
+    await db.query(
+      `INSERT INTO jobs (tenant_id, payload, status) VALUES
+         ('bank', '{}', 'running'), ('bank', '{}', 'running'),
+         ('bank', '{}', 'pending'), ('bank', '{}', 'ready'),
+         ('bank', '{}', 'failed'),
+         ('bank', '{}', 'succeeded'), ('bank', '{}', 'dead')`,
+    );
+
+    const pool = await (await get("/pool")).json();
+    const tenant = (id: string) =>
+      pool.tenants.find((t: { id: string }) => t.id === id);
+
+    assert.equal(pool.slots, 10); // the silent worker is not part of the pool
+    assert.deepEqual(tenant("bank"), {
+      id: "bank",
+      weight: 4,
+      running: 2,
+      waiting: 3, // not started yet, or waiting for a retry
+    });
+    assert.deepEqual(tenant("cafe"), {
+      id: "cafe",
+      weight: 1,
+      running: 0,
+      waiting: 0,
+    });
   });
 
   // Postgres takes the connection but never answers: a frozen server, or a
@@ -124,7 +161,7 @@ describe("the API", { skip }, () => {
       DATABASE_URL: postgres.url,
       DB_TIMEOUT_MS: "300",
     });
-    const job = JSON.stringify({ tenant_id: "small-1", payload: {} });
+    const job = JSON.stringify({ tenant_id: "cafe", payload: {} });
     try {
       assert.equal((await post(job, second.url)).status, 201);
 

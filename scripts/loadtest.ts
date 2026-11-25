@@ -235,10 +235,10 @@ async function save(name: string, content: string): Promise<void> {
 
 async function flood(): Promise<void> {
   const smallTenants = [
-    { id: "small-1", jobs: 5 },
-    { id: "small-2", jobs: 7 },
-    { id: "small-3", jobs: 8 },
-    { id: "small-4", jobs: 10 },
+    { id: "cafe", jobs: 5 },
+    { id: "kiosk", jobs: 7 },
+    { id: "barber", jobs: 8 },
+    { id: "florist", jobs: 10 },
   ];
   const out: string[] = [];
   const say = (text = "") => {
@@ -252,10 +252,10 @@ async function flood(): Promise<void> {
   say(`pool: ${pool} worker slots, all tenants have weight 1\n`);
 
   say(
-    `"big" submits ${FLOOD_JOBS.toLocaleString("en")} jobs (50 to 500 ms each) ...`,
+    `"supermarket" submits ${FLOOD_JOBS.toLocaleString("en")} jobs (50 to 500 ms each) ...`,
   );
   const floodStart = await dbNow();
-  const rate = await submitMany("big", FLOOD_JOBS, between(50, 500));
+  const rate = await submitMany("supermarket", FLOOD_JOBS, between(50, 500));
   say(
     `submitted through the API at ${Math.round(rate).toLocaleString("en")} jobs per second`,
   );
@@ -266,7 +266,7 @@ async function flood(): Promise<void> {
     "SELECT count(*)::int AS n FROM jobs WHERE status = 'pending'",
   );
   say(
-    `\n${waiting.rows[0].n.toLocaleString("en")} jobs of "big" are still waiting. ` +
+    `\n${waiting.rows[0].n.toLocaleString("en")} jobs of "supermarket" are still waiting. ` +
       `Now the small tenants submit ${smallTenants.map((t) => t.jobs).join(", ")} jobs (100 to 400 ms each).`,
   );
   await Promise.all(
@@ -277,7 +277,7 @@ async function flood(): Promise<void> {
     ),
   );
 
-  // Wait for every small job to finish, then watch the pool go back to "big".
+  // Wait for every small job to finish, then watch the pool go back to "supermarket".
   const smallIds = smallTenants.map((t) => t.id);
   for (;;) {
     const left = await db.query(
@@ -347,13 +347,13 @@ async function flood(): Promise<void> {
   // What a single shared queue would have done to them.
   const ahead = await db.query(
     `SELECT count(*)::int AS n FROM jobs
-     WHERE tenant_id = 'big' AND created_at <= $1
+     WHERE tenant_id = 'supermarket' AND created_at <= $1
        AND (started_at IS NULL OR started_at > $1)`,
     [arrival],
   );
   const average = await db.query(
     `SELECT avg(extract(epoch FROM finished_at - started_at))::float8 AS s
-     FROM jobs WHERE tenant_id = 'big' AND status = 'succeeded'`,
+     FROM jobs WHERE tenant_id = 'supermarket' AND status = 'succeeded'`,
   );
   const fifoWait = (ahead.rows[0].n * average.rows[0].s) / pool;
   say(
@@ -363,8 +363,8 @@ async function flood(): Promise<void> {
 
   // How were the workers shared over time?
   const symbols = [
-    { id: "big", symbol: "#" },
-    ...smallTenants.map((t, i) => ({ id: t.id, symbol: String(i + 1) })),
+    { id: "supermarket", symbol: "#" },
+    ...smallTenants.map((t) => ({ id: t.id, symbol: t.id[0] })),
   ];
   const buckets = await workerTime(from, end, BUCKET_SECONDS, arrival);
   say(
@@ -413,22 +413,22 @@ async function weights(): Promise<void> {
   // so the shares must follow the weights whatever the jobs look like.
   const tenants = [
     {
-      id: "bronze",
-      symbol: "b",
+      id: "school",
+      symbol: "1",
       weight: 1,
       jobs: 6000,
       sleepMs: between(50, 150),
     },
     {
-      id: "silver",
-      symbol: "s",
+      id: "hotel",
+      symbol: "2",
       weight: 2,
       jobs: 2500,
       sleepMs: between(200, 800),
     },
     {
-      id: "gold",
-      symbol: "G",
+      id: "bank",
+      symbol: "4",
       weight: 4,
       jobs: 1200,
       sleepMs: between(1000, 3000),
@@ -447,9 +447,7 @@ async function weights(): Promise<void> {
     `WEIGHTS: three tenants with weights 1, 2 and 4, all with a deep backlog`,
   );
   say(`pool: ${pool} worker slots`);
-  say(
-    `job lengths: bronze 50 to 150 ms, silver 200 to 800 ms, gold 1 to 3 s\n`,
-  );
+  say(`job lengths: school 50 to 150 ms, hotel 200 to 800 ms, bank 1 to 3 s\n`);
 
   await Promise.all(tenants.map((t) => submitMany(t.id, t.jobs, t.sleepMs)));
   await sleep(2000);

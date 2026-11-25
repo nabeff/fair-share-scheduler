@@ -1,10 +1,10 @@
 [
-  { "id": "big", "weight": 1 },
-  { "id": "small-1", "weight": 1 },
-  { "id": "small-2", "weight": 1 },
-  { "id": "small-3", "weight": 1 },
-  { "id": "small-4", "weight": 1 },
-  { "id": "bronze", "weight": 1 },
-  { "id": "silver", "weight": 2 },
-  { "id": "gold", "weight": 4 }
+  { "id": "supermarket", "weight": 1 },
+  { "id": "cafe", "weight": 1 },
+  { "id": "kiosk", "weight": 1 },
+  { "id": "barber", "weight": 1 },
+  { "id": "florist", "weight": 1 },
+  { "id": "school", "weight": 1 },
+  { "id": "hotel", "weight": 2 },
+  { "id": "bank", "weight": 4 }
 ]
